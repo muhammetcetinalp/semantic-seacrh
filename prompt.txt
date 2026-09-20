@@ -1,0 +1,947 @@
+Bir full-stack komuta kontrol uygulamasına entegre edilecek bağımsız bir Search Service geliştireceğiz.
+
+Bu servis büyük miktarda structured ve unstructured verinin aranmasını sağlayacak. Amaç yalnızca klasik keyword search değil, semantic search ve structured filtering yeteneklerini de tek servis altında birleştirmek.
+
+Aşağıdaki mimari ve teknik kararlar kesinleşmiştir. Bunları temel alarak projeyi tasarla ve implemente et.
+
+## Temel Amaç
+
+Search Service, mevcut ana uygulamadan bağımsız bir servis olacak.
+
+Ana uygulama OpenSearch'e doğrudan erişmeyecek.
+
+Tüm arama ve indexing işlemleri bu servis üzerinden yapılacak.
+
+Genel yapı:
+
+```text
+Application
+    |
+    v
+Search Service
+    |
+    +-- Search API
+    |
+    +-- Indexing / Synchronization
+    |
+    +-- Embedding Component
+    |
+    v
+OpenSearch
+    |
+    +-- BM25
+    +-- Vector Search
+    +-- Structured Filters
+    +-- Hybrid Search
+```
+
+İlk aşamada AI / Agent entegrasyonu yapılmayacak.
+
+Öncelikle bağımsız, temiz ve production-oriented bir Search Service oluşturulacak.
+
+---
+
+## Teknoloji Stack
+
+Aşağıdaki teknolojileri kullan:
+
+* Java 21
+* Maven
+* Spring Boot
+* Implementasyon anındaki en güncel stable Spring Boot sürümünü kullan.
+* PostgreSQL
+* OpenSearch 3.x güncel stable sürümü
+* REST API
+
+Spring framework'ün sağladığı imkanlardan mümkün olduğunca doğru şekilde yararlan:
+
+* Dependency Injection
+* Configuration Properties
+* Profiles
+* Validation
+* Spring Data
+* Transaction Management
+* Global Exception Handling
+* Actuator / Health Checks
+* Structured configuration
+* Environment based configuration
+* Logging
+* Metrics için uygun Spring altyapısı
+
+Ancak gereksiz framework kullanımı veya abstraction oluşturma.
+
+---
+
+# Temel Mimari Kararlar
+
+## 1. OpenSearch Source of Truth Değildir
+
+OpenSearch ana veri kaynağı olmayacak.
+
+Asıl domain verileri mevcut sistemlerde / database'lerde bulunmaya devam edecek.
+
+OpenSearch yalnızca:
+
+* search
+* indexing
+* retrieval
+* relevance ranking
+
+için optimize edilmiş bir read/search model olacak.
+
+---
+
+## 2. Search Service OpenSearch'ü İzole Etmeli
+
+Ana uygulama OpenSearch client veya query DSL bilmemeli.
+
+Yanlış:
+
+```text
+Main Application
+      |
+      v
+OpenSearch
+```
+
+Doğru:
+
+```text
+Main Application
+      |
+      v
+Search Service
+      |
+      v
+OpenSearch
+```
+
+OpenSearch'e erişim Search Service içerisinde bir adapter/client katmanının arkasında tutulmalı.
+
+OpenSearch implementasyon detayları domain/service katmanlarına yayılmamalı.
+
+---
+
+## 3. Search Yaklaşımı
+
+İlk versiyonda aşağıdaki arama yöntemleri desteklenecek:
+
+### BM25 / Lexical Search
+
+Exact kelimeler, isimler, kodlar ve text search için.
+
+### Vector / Semantic Search
+
+Anlamsal benzerlik için.
+
+### Structured Filters
+
+Örneğin:
+
+```text
+type
+status
+region
+category
+source
+timestamp
+priority
+```
+
+gibi alanlarda exact/range filtering yapılacak.
+
+### Hybrid Search
+
+BM25 ve vector search birlikte kullanılacak.
+
+İlk tercih edilen ranking fusion yöntemi:
+
+```text
+RRF - Reciprocal Rank Fusion
+```
+
+olacak.
+
+Temel yapı:
+
+```text
+Query
+ |
+ +--> BM25
+ |
+ +--> Vector Search
+ |
+ +--> Structured Filters
+ |
+ v
+RRF
+ |
+ v
+Ranked Results
+```
+
+---
+
+# 4. Embedding Mimarisi
+
+Embedding üretimi OpenSearch içerisine gömülmeyecek.
+
+OpenSearch'ün temel sorumluluğu:
+
+```text
+vector saklamak
++
+vector aramak
+```
+
+olacak.
+
+Embedding üretimi Search Service tarafından yönetilecek.
+
+Beklenen yapı:
+
+```text
+Search Service
+      |
+      v
+Embedding Component / Service
+      |
+      v
+Vector
+      |
+      v
+OpenSearch
+```
+
+Örneğin:
+
+```text
+"Long range radar surveillance unit"
+        |
+        v
+Embedding Model
+        |
+        v
+[0.21, -0.74, 0.11, ...]
+        |
+        v
+OpenSearch
+```
+
+Bu yaklaşım sayesinde embedding modeli OpenSearch'ten bağımsız değiştirilebilmeli.
+
+İleride embedding modeli:
+
+* local model
+* remote model
+* GPU server
+* farklı embedding provider
+
+olabilir.
+
+Bu nedenle embedding erişimi interface/adapter arkasında tutulmalı.
+
+Örneğin kavramsal olarak:
+
+```java
+EmbeddingProvider
+```
+
+gibi bir abstraction kullanılabilir.
+
+Ancak gereksiz abstraction üretme.
+
+---
+
+# 5. Search Document Modeli
+
+Mevcut structured ve unstructured veriler doğrudan rastgele şekilde OpenSearch'e yazılmayacak.
+
+Domain verileri önce Search Service içerisindeki ortak search modeline dönüştürülecek.
+
+Örneğin ileride şu tarz bir yapı olabilir:
+
+```text
+id
+type
+title
+searchText
+tags
+metadata
+createdAt
+updatedAt
+embedding
+```
+
+Ancak şu anda kesin SearchDocument field listesini belirleme.
+
+Gerçek domain dataları görüldüğünde nihai modele karar verilecek.
+
+Önemli prensip:
+
+```text
+Domain Object
+      |
+      v
+DomainSearchMapper
+      |
+      v
+SearchDocument
+      |
+      v
+OpenSearch
+```
+
+Örneğin:
+
+```text
+Unit
+ |
+ v
+UnitSearchMapper
+ |
+ v
+SearchDocument
+```
+
+Yeni domain veri tipi geldiğinde mümkün olduğunca yalnızca yeni mapper eklenmesi yeterli olmalı.
+
+---
+
+# 6. Structured Field ve Semantic Field Ayrımı
+
+Her field embedding'e dahil edilmemeli.
+
+Örneğin:
+
+```text
+status
+region
+type
+category
+timestamp
+priority
+source
+```
+
+gibi alanlar structured filter olarak tutulmalı.
+
+Örneğin:
+
+```text
+region = ANKARA
+status = ACTIVE
+timestamp > X
+```
+
+şeklinde sorgulanabilmeli.
+
+Buna karşılık:
+
+```text
+description
+name
+report text
+notes
+human readable content
+```
+
+gibi alanlar:
+
+```text
+BM25
++
+embedding
+```
+
+için kullanılabilir.
+
+Hangi field'ların semantic content olacağı gerçek datalar görüldüğünde belirlenecek.
+
+---
+
+# 7. JSON'u Körlemesine Embed Etme
+
+Şu yaklaşımı kullanma:
+
+```text
+JSON.stringify(domainObject)
+        |
+        v
+embedding
+```
+
+Bunun yerine kontrollü bir semantic representation oluştur.
+
+Örneğin ileride:
+
+```text
+name
++
+description
++
+important semantic fields
+```
+
+birleştirilerek:
+
+```text
+searchText
+```
+
+üretilebilir.
+
+Sonra:
+
+```text
+searchText -> BM25
+searchText -> embedding
+```
+
+yapılabilir.
+
+---
+
+# 8. OpenSearch Index Tasarımı
+
+Her struct veya domain object için ayrı index açma.
+
+Örneğin aşağıdaki yaklaşım istenmiyor:
+
+```text
+unit_index
+vehicle_index
+sensor_index
+radar_index
+mission_index
+event_index
+...
+```
+
+Bunun yerine domain veya lifecycle bazlı sınırlı sayıda index düşün.
+
+Örneğin ileride:
+
+```text
+entities
+events
+documents
+reference
+```
+
+gibi gruplamalar kullanılabilir.
+
+Ancak gerçek datalar görülmeden kesin index yapısı oluşturma.
+
+Index tasarımını extensible yap.
+
+---
+
+# 9. Dynamic Mapping Kullanımına Dikkat
+
+Kontrolsüz dynamic mapping kullanma.
+
+Çok sayıda farklı structured data tipi olduğu için field explosion / mapping explosion oluşabilir.
+
+Önemli ve sorgulanacak alanlar açık mapping ile tanımlanmalı.
+
+Çok değişken veya search açısından kritik olmayan alanlar kontrollü şekilde ele alınmalı.
+
+---
+
+# 10. Veri Senkronizasyonu
+
+Search Service veri değişikliklerini OpenSearch ile senkronize edebilmeli.
+
+Minimum olarak:
+
+```text
+CREATE
+UPDATE
+DELETE
+```
+
+işlemleri desteklenecek.
+
+Mantıksal akış:
+
+```text
+Domain data changes
+       |
+       v
+Search indexing layer
+       |
+       +--> CREATE -> index
+       |
+       +--> UPDATE -> update/upsert
+       |
+       +--> DELETE -> delete
+       |
+       v
+OpenSearch
+```
+
+İlk tasarımda synchronization mekanizmasını clean şekilde ayrıştır.
+
+İleride event-driven modele geçilebilmesi mümkün olmalı:
+
+```text
+DOMAIN_CREATED
+DOMAIN_UPDATED
+DOMAIN_DELETED
+```
+
+gibi eventler kullanılabilir.
+
+Ancak ilk implementasyonu gereksiz yere Kafka vb. bağımlılıklarla karmaşıklaştırma.
+
+---
+
+# 11. Embedding Yeniden Hesaplama Politikası
+
+Her update işleminde embedding yeniden oluşturulmayacak.
+
+Örneğin:
+
+```text
+status:
+ACTIVE -> INACTIVE
+```
+
+değişmişse ve status embedding içeriğine dahil değilse embedding yeniden hesaplanmamalı.
+
+Ancak:
+
+```text
+description
+```
+
+gibi semantic content değişirse embedding yeniden oluşturulmalı.
+
+Bu ayrım mimaride desteklenmeli.
+
+---
+
+# 12. Çok Hızlı Değişen Veriler
+
+Sistemde bazı veriler:
+
+* statik
+* nadiren değişen
+* zaman zaman değişen
+* çok hızlı değişen
+
+olabilir.
+
+Örneğin canlı:
+
+```text
+position
+state
+telemetry
+```
+
+gibi veriler çok sık değişebilir.
+
+Bu tip verileri her değişimde:
+
+```text
+embedding
++
+OpenSearch reindex
+```
+
+yapmak istemiyoruz.
+
+Search açısından gerçekten gerekli olan alanları indexle.
+
+Çok hızlı değişen live state için ayrı indexing/update politikası oluşturulabilecek şekilde tasarla.
+
+---
+
+# 13. PostgreSQL
+
+Search Service'in kendi PostgreSQL database'i olacak.
+
+PostgreSQL OpenSearch'ün alternatifi değildir.
+
+OpenSearch:
+
+```text
+search / retrieval
+```
+
+için kullanılacak.
+
+PostgreSQL ise Search Service'in kendi persistent state ihtiyaçları için kullanılacak.
+
+Örneğin ileride:
+
+* indexing state
+* synchronization state
+* source metadata
+* configuration
+* failed indexing operations
+* job information
+
+gibi Search Service'e ait bilgileri tutabilir.
+
+Ancak gereksiz tablolar oluşturma.
+
+Önce gerçekten gerekli persistence ihtiyaçlarını belirle.
+
+Spring Data'nın uygun çözümünü kullan.
+
+---
+
+# 14. Kod Kalitesi
+
+Kod:
+
+* structured
+* readable
+* maintainable
+* extensible
+* production-oriented
+
+olmalı.
+
+Class ve method isimleri ne yaptığını açıkça anlatmalı.
+
+Aşağıdaki tarz yapılar istemiyorum:
+
+```java
+CommonManager
+Helper
+Utils
+DataProcessor
+GeneralService
+```
+
+gibi ne yaptığı belli olmayan isimler.
+
+Domain responsibility açık olmalı.
+
+Örneğin:
+
+```text
+SearchQueryService
+SearchIndexService
+EmbeddingProvider
+OpenSearchClientAdapter
+```
+
+gibi anlamı net isimler tercih edilebilir.
+
+Ancak isimleri körlemesine kullanma; sorumluluklara göre en doğru isimleri seç.
+
+---
+
+# 15. Package Yapısı
+
+Spring Boot projesi tek bir dev package içinde olmamalı.
+
+Ancak klasik:
+
+```text
+controller
+service
+repository
+model
+utils
+```
+
+şeklindeki aşırı teknik package ayrımını da otomatik olarak kullanma.
+
+Feature/domain oriented bir yapı tercih et.
+
+Örneğin konsept olarak:
+
+```text
+search/
+indexing/
+embedding/
+opensearch/
+configuration/
+```
+
+gibi responsibility-oriented bir yapı düşünülebilir.
+
+Gerçek package yapısını mimariye göre oluştur.
+
+---
+
+# 16. API
+
+Search Service REST API sağlayacak.
+
+İlk aşamada en azından:
+
+```text
+POST /search
+```
+
+gibi ortak bir search endpoint'i düşün.
+
+İleride gerekirse:
+
+```text
+semantic search
+hybrid search
+filtering
+```
+
+aynı request modeli üzerinden kontrol edilebilir.
+
+Kullanıcı OpenSearch DSL yazmak zorunda olmamalı.
+
+Örneğin:
+
+```json
+{
+  "query": "communication problems",
+  "types": ["unit", "event"],
+  "filters": {
+    "region": "ANKARA"
+  },
+  "limit": 20
+}
+```
+
+gibi Search Service'e ait temiz bir API modeli olmalı.
+
+Ancak API modelini gerçek gereksinimleri görmeden gereğinden fazla büyütme.
+
+---
+
+# 17. Configuration
+
+Aşağıdakiler hardcode edilmemeli:
+
+```text
+OpenSearch URL
+OpenSearch credentials
+PostgreSQL connection
+Embedding endpoint
+Embedding model
+timeouts
+index names
+search limits
+```
+
+Spring configuration properties kullanılmalı.
+
+Örneğin:
+
+```yaml
+search:
+  opensearch:
+    ...
+  embedding:
+    ...
+```
+
+gibi clean configuration tasarla.
+
+Secret değerleri kaynak kod içerisinde tutma.
+
+---
+
+# 18. Observability
+
+Spring Actuator kullan.
+
+En azından:
+
+```text
+health
+readiness
+liveness
+```
+
+kontrollerini düşün.
+
+OpenSearch bağlantısı ve PostgreSQL bağlantısı health açısından izlenebilir olmalı.
+
+Logging structured ve anlaşılır olmalı.
+
+Gereksiz log üretme.
+
+---
+
+# 19. Error Handling
+
+Global exception handling kullan.
+
+Controller içinde try/catch bloklarıyla kodu kirletme.
+
+Örneğin:
+
+```text
+validation error
+OpenSearch unavailable
+embedding unavailable
+document not found
+indexing error
+```
+
+gibi durumları açık şekilde ele al.
+
+Client'a internal implementation detail veya stack trace gönderme.
+
+---
+
+# 20. İlk POC Kapsamı
+
+İlk implementasyonu küçük ve anlaşılır tut.
+
+İlk hedef:
+
+```text
+Java 21
+Spring Boot
+Maven
+PostgreSQL
+OpenSearch
+
+Search API
+Indexing API / mechanism
+BM25
+Vector Search
+Structured Filter
+RRF Hybrid Search
+Embedding abstraction
+```
+
+çalışır hale gelsin.
+
+İlk aşamada:
+
+* AI Agent entegrasyonu yapma.
+* Kafka ekleme.
+* Gereksiz distributed architecture oluşturma.
+* Gereksiz microservice üretme.
+* Gereksiz design pattern kullanma.
+* Gerçek ihtiyaç olmadan Redis vb. ekleme.
+
+---
+
+# Beklediğim Çalışma Şekli
+
+Implementasyona körlemesine başlama.
+
+Önce mevcut repository'yi analiz et.
+
+Şunları belirle:
+
+1. Mevcut project structure nedir?
+2. Search Service yeni bir Maven module mü olmalı yoksa bağımsız repository/service mi?
+3. Mevcut configuration yaklaşımı nedir?
+4. Mevcut PostgreSQL kullanımı var mı?
+5. Mevcut error response standardı var mı?
+6. Mevcut logging / monitoring yaklaşımı var mı?
+7. Docker / deployment yapısı var mı?
+
+Daha sonra kısa ve somut bir implementation plan oluştur.
+
+Planı gereksiz uzun tutma.
+
+Ardından implementasyona geç.
+
+---
+
+# Implementasyon Sırası
+
+Tercihen şu sırayla ilerle:
+
+```text
+1. Project bootstrap
+2. Configuration structure
+3. PostgreSQL configuration
+4. OpenSearch client integration
+5. Embedding abstraction
+6. Search domain/request/response model
+7. Indexing component
+8. Lexical/BM25 search
+9. Structured filtering
+10. Vector search
+11. RRF hybrid search
+12. REST API
+13. Validation
+14. Error handling
+15. Health checks
+16. Tests
+```
+
+Gerekirse sıralamayı repository'nin durumuna göre değiştir.
+
+---
+
+# Test Beklentisi
+
+Unit ve integration testleri yaz.
+
+Özellikle şunları test et:
+
+```text
+BM25 search
+filtering
+vector search
+hybrid search
+create indexing
+update indexing
+delete indexing
+semantic field changed
+semantic field not changed
+OpenSearch unavailable
+embedding service unavailable
+invalid request
+```
+
+Test edilebilirlik için business logic'i framework/client detaylarına sıkıca bağlama.
+
+---
+
+# Sonuçta Beklediğim
+
+Bana yalnızca teorik mimari anlatma.
+
+Gerçek repository üzerinde uygulanabilir, çalışan bir Search Service oluştur.
+
+Kod production-quality seviyesinde olsun.
+
+Ancak gereğinden fazla enterprise abstraction üretme.
+
+Ana prensip:
+
+```text
+Simple
++
+Explicit
++
+Extensible
++
+Readable
+```
+
+olsun.
+
+Bir karar verirken iki çözüm arasında kalırsan en basit ama gelecekte genişlemeye engel olmayan çözümü tercih et.
+
+Özellikle şu prensibi unutma:
+
+```text
+OpenSearch = Search Engine
+
+PostgreSQL = Search Service Persistent State
+
+Embedding Provider = Vector Production
+
+Search Service = Bu yapıların orchestration/API katmanı
+```
+
+İlk aşamada gerçek domain data mappinglerine girme.
+
+Önce sağlam Search Service altyapısını oluştur.
+
+Domain datalar ve hangi field'ların indexleneceği daha sonra ayrıca verilecek.

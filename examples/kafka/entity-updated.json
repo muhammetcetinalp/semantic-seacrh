@@ -1,0 +1,16 @@
+{
+  "eventId": "demo-1-updated-v2",
+  "eventType": "ENTITY_UPDATED",
+  "documentId": "demo-1",
+  "version": 2,
+  "data": {
+    "title": "Radar Alpha Updated",
+    "searchText": "Long range mobile radar surveillance unit",
+    "tags": ["radar", "mobile"],
+    "structuredFields": {
+      "region": "ANKARA",
+      "status": "ACTIVE",
+      "priority": 8
+    }
+  }
+}

@@ -1,0 +1,42 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:kafka-test;DB_CLOSE_DELAY=-1
+  kafka:
+    admin:
+      auto-create: false
+    consumer:
+      group-id: semantic-search-embedded-test
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      max-poll-records: 1
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+search:
+  kafka:
+    enabled: true
+    topics: indexing-test
+    dead-letter-topic: indexing-test-dlt
+    retry-attempts: 2
+    retry-delay-ms: 50
+    publish-timeout-ms: 5000
+    routes:
+      "[ENTITY_CREATED]":
+        operation: UPSERT
+        index-name: kafka-entities
+        document-type: entity
+      "[ENTITY_UPDATED]":
+        operation: UPSERT
+        index-name: kafka-entities
+        document-type: entity
+      "[ENTITY_DELETED]":
+        operation: DELETE
+        index-name: kafka-entities
+        document-type: entity
+logging:
+  level:
+    org.apache.kafka: WARN
+    kafka: WARN

@@ -1,0 +1,6 @@
+{
+  "eventId": "demo-1-deleted-v3",
+  "eventType": "ENTITY_DELETED",
+  "documentId": "demo-1",
+  "version": 3
+}

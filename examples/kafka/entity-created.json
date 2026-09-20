@@ -1,0 +1,19 @@
+{
+  "eventId": "demo-1-created-v1",
+  "eventType": "ENTITY_CREATED",
+  "documentId": "demo-1",
+  "version": 1,
+  "data": {
+    "title": "Radar Alpha",
+    "searchText": "Long range radar surveillance unit",
+    "tags": ["radar", "surveillance"],
+    "structuredFields": {
+      "region": "ANKARA",
+      "status": "ACTIVE",
+      "priority": 5
+    },
+    "metadata": {
+      "source": "kafka-example"
+    }
+  }
+}

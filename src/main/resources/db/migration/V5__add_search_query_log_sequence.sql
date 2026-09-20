@@ -1,0 +1,1 @@
+CREATE SEQUENCE search_query_log_seq START WITH 1 INCREMENT BY 1;
