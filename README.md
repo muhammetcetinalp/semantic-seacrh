@@ -19,8 +19,11 @@ Bu proje; **Java 21**, **Spring Boot 4.x**, **OpenSearch 3.8.0**, **Qdrant Multi
 
 ---
 
-> 💡 **Uçtan Uca Detaylı İstek ve Arama Yaşam Döngüsü Rehberi:**  
-> Kullanıcı sorgu yazdığında isteğin hangi adrese, hangi formatta gittiği, ColBERT ve Dense farkları, OpenSearch / Qdrant / Ollama / Cross-Encoder ve Oracle adımlarının tüm teknik ayrıntıları için **[ARAMA_MIMARISI_README.md](ARAMA_MIMARISI_README.md)** dokümanını inceleyebilirsiniz.
+> 💡 **Derinlemesine Teknik Mimari Rehberleri:**  
+> Projenin tüm iç işleyişi 3 ayrı uzmanlaşmış rehberde detaylandırılmıştır:
+> 1. 🔍 **[ARAMA_MIMARISI_README.md](ARAMA_MIMARISI_README.md)**: Kullanıcı sorgu yazdığında isteğin uçtan uca akışı, BM25, Dense Vector, ColBERT MaxSim, RRF Füzyonu ve Saf Java Cross-Encoder Reranker yaşam döngüsü.
+> 2. 🗄️ **[VERI_DEPOLAMA_MIMARISI_README.md](VERI_DEPOLAMA_MIMARISI_README.md)**: Oracle 23ai (`indexing_state`, `search_query_log`), OpenSearch (`olaylar`, Turkish Analyzer, GeoPoint, 1024-dim HNSW) ve Qdrant (`colbert_olaylar`, Multi-Vector) veri modelleri ve saklama formatları.
+> 3. 🛰️ **[KAFKA_VE_OLAY_AKISI_README.md](KAFKA_VE_OLAY_AKISI_README.md)**: Apache Kafka KRaft altyapısı, dağıtık Idempotency (çift kayıt önleme), `SELECT FOR UPDATE` kilitlemesi, sürüm takibi ve canlı simülasyon producer motoru.
 
 ---
 
