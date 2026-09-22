@@ -165,19 +165,28 @@ public class QdrantAdapter {
 
     @SuppressWarnings("unchecked")
     public List<QdrantSearchResult> searchMaxSim(List<List<Float>> queryVectors, int limit) {
+        return searchMaxSim(queryVectors, Map.of(), limit);
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<QdrantSearchResult> searchMaxSim(List<List<Float>> queryVectors, Map<String, Object> filters, int limit) {
         if (!isAvailable() || queryVectors == null || queryVectors.isEmpty()) {
             return List.of();
         }
 
         String collection = properties.getCollectionName();
         try {
+            Map<String, Object> qdrantFilter = buildQdrantFilter(filters);
+
             // First try Qdrant 1.10+ query API
-            Map<String, Object> queryBody = Map.of(
-                    "query", queryVectors,
-                    "using", "colbert",
-                    "limit", limit,
-                    "with_payload", true
-            );
+            Map<String, Object> queryBody = new HashMap<>();
+            queryBody.put("query", queryVectors);
+            queryBody.put("using", "colbert");
+            queryBody.put("limit", limit);
+            queryBody.put("with_payload", true);
+            if (qdrantFilter != null) {
+                queryBody.put("filter", qdrantFilter);
+            }
 
             Map<String, Object> response = null;
             try {
@@ -189,11 +198,14 @@ public class QdrantAdapter {
                         .body(Map.class);
             } catch (Exception queryApiErr) {
                 // Fallback to /points/search API
-                Map<String, Object> searchBody = Map.of(
-                        "vector", Map.of("name", "colbert", "vector", queryVectors),
-                        "limit", limit,
-                        "with_payload", true
-                );
+                Map<String, Object> searchBody = new HashMap<>();
+                searchBody.put("vector", Map.of("name", "colbert", "vector", queryVectors));
+                searchBody.put("limit", limit);
+                searchBody.put("with_payload", true);
+                if (qdrantFilter != null) {
+                    searchBody.put("filter", qdrantFilter);
+                }
+
                 response = restClient.post()
                         .uri("/collections/{collection}/points/search", collection)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -231,5 +243,28 @@ public class QdrantAdapter {
             log.error("Qdrant MaxSim search error: {}", e.getMessage(), e);
             return List.of();
         }
+    }
+
+    private Map<String, Object> buildQdrantFilter(Map<String, Object> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return null;
+        }
+        List<Map<String, Object>> mustList = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : filters.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (value == null) continue;
+
+            if (value instanceof List<?> listVal) {
+                List<String> strList = listVal.stream().map(Object::toString).toList();
+                mustList.add(Map.of("key", key, "match", Map.of("any", strList)));
+            } else if (value instanceof String || value instanceof Number || value instanceof Boolean) {
+                mustList.add(Map.of("key", key, "match", Map.of("value", value)));
+            }
+        }
+        if (mustList.isEmpty()) {
+            return null;
+        }
+        return Map.of("must", mustList);
     }
 }

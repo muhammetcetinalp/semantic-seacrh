@@ -146,16 +146,19 @@ public class OlaylarIngestionService {
                 // Combined search text for rich multi-field BM25 & semantic matching
                 StringBuilder sb = new StringBuilder();
                 if (!title.isBlank()) sb.append(title).append("\n\n");
-                if (!shortText.isBlank()) sb.append(shortText).append("\n\n");
-                if (!longText.isBlank()) sb.append(longText).append("\n\n");
+                if (!longText.isBlank()) {
+                    sb.append(longText).append("\n\n");
+                } else if (!shortText.isBlank()) {
+                    sb.append(shortText).append("\n\n");
+                }
                 if (!birim.isBlank()) sb.append("Birim: ").append(birim).append("\n");
                 if (!adres.isBlank()) sb.append("Adres: ").append(adres);
                 String fullSearchText = sb.toString().trim();
 
                 float[] denseEmbedding = null;
-                if (enableDenseEmbedding) {
+                if (enableDenseEmbedding && !fullSearchText.isBlank()) {
                     try {
-                        denseEmbedding = embeddingProvider.generateEmbedding(fullSearchText.substring(0, Math.min(500, fullSearchText.length())));
+                        denseEmbedding = embeddingProvider.generateEmbedding(fullSearchText);
                     } catch (Exception e) {
                         log.debug("Dense embedding generation skipped for {}: {}", entityId, e.getMessage());
                     }
@@ -188,7 +191,7 @@ public class OlaylarIngestionService {
 
                 // Prepare Qdrant multi-vector point
                 if (colbertService.isAvailable() && qdrantAdapter.isAvailable()) {
-                    List<List<Float>> multiVectors = colbertService.embedDocument(entityId, title, shortText + " " + longText);
+                    List<List<Float>> multiVectors = colbertService.embedDocument(entityId, title, fullSearchText);
                     if (multiVectors != null && !multiVectors.isEmpty()) {
                         Map<String, Object> payload = new HashMap<>();
                         payload.put("title", title);

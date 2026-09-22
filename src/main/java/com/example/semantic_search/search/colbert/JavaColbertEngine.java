@@ -21,6 +21,59 @@ public class JavaColbertEngine {
     private static final Logger log = LoggerFactory.getLogger(JavaColbertEngine.class);
     private static final int VECTOR_DIM = 128;
 
+    /**
+     * Standard ColBERT token limits to avoid Qdrant memory explosion
+     * and maintain fast MaxSim matrix scoring.
+     */
+    public static final int MAX_QUERY_TOKENS = 32;
+    public static final int MAX_DOC_TOKENS = 256;
+
+    /**
+     * Domain Semantic Concept Mapping for pure Java embedding similarity.
+     * Injects concept-level cosine similarity between synonyms and related terms
+     * (e.g. "kaldırım" <-> "yol kenarı", "araba" <-> "taşıt", "gemi" <-> "fırkateyn").
+     */
+    private static final Map<String, String> CONCEPT_MAP = new HashMap<>();
+
+    static {
+        // Yaya / Yol / Kaldırım
+        registerConcept("CONCEPT:WALKWAY", "kaldırım", "kaldırımı", "kaldırımlar", "kaldırımda",
+                "tretuvar", "yol", "kenarı", "kenar", "yolkenarı", "yaya", "patika", "yürüyüş");
+        // Taşıt / Araç
+        registerConcept("CONCEPT:VEHICLE", "araç", "araba", "otomobil", "vasıta", "taşıt",
+                "kamyon", "tır", "otobüs", "minibüs", "motosiklet", "motor");
+        // Deniz / Gemi / Bot
+        registerConcept("CONCEPT:VESSEL", "gemi", "tekne", "bot", "fırkateyn", "hücumbot",
+                "korvet", "tanker", "kargo", "sandal", "yat", "vapur", "feribot");
+        // Kaza / Çarpışma / Hasar
+        registerConcept("CONCEPT:ACCIDENT", "kaza", "kazası", "çarpışma", "devrilme", "kırım",
+                "hasar", "kazaen", "çarpma", "savrulma");
+        // Yangın / Alev / İtfiaye
+        registerConcept("CONCEPT:FIRE", "yangın", "yangını", "alev", "duman", "itfaiye",
+                "yanma", "kundaklama", "patlama", "infilak");
+        // Güvenlik / Kolluk / Asayiş
+        registerConcept("CONCEPT:SECURITY", "emniyet", "polis", "jandarma", "sahil", "güvenlik",
+                "komutanlığı", "karakol", "asayiş", "devriye", "muhafaza");
+        // Arama Kurtarma / Müdahale
+        registerConcept("CONCEPT:RESCUE", "kurtarma", "tahliye", "yardım", "arama", "müdahale",
+                "afad", "sedyeyle", "sağ", "yaralı");
+        // Şüpheli / Kaçak / İhlal
+        registerConcept("CONCEPT:SUSPICIOUS", "şüpheli", "kaçak", "ihlal", "izinsiz",
+                "kaçakçılık", "firar", "yetkisiz", "zanlı");
+        // Denizcilik / Boğaz / Liman / Kıyı
+        registerConcept("CONCEPT:MARITIME", "boğaz", "boğazı", "liman", "marina", "rıhtım",
+                "iskele", "açıkları", "deniz", "kıyı", "koyu", "kıyıdan");
+        // Hava Taşıtları
+        registerConcept("CONCEPT:AERIAL", "uçak", "helikopter", "iha", "siha", "dron", "drone",
+                "hava", "uçuş");
+    }
+
+    private static void registerConcept(String conceptKey, String... words) {
+        for (String w : words) {
+            CONCEPT_MAP.put(w.toLowerCase(Locale.forLanguageTag("tr")), conceptKey);
+        }
+    }
+
     public List<List<Float>> embedQuery(String query) {
         if (query == null || query.isBlank()) {
             return List.of();
@@ -30,7 +83,7 @@ public class JavaColbertEngine {
     }
 
     public List<List<Float>> embedDocument(String id, String title, String text) {
-        String fullText = ((title != null ? title : "") + " " + (text != null ? text : "")).trim();
+        String fullText = resolveFullText(title, text);
         if (fullText.isBlank()) {
             return List.of();
         }
@@ -50,8 +103,12 @@ public class JavaColbertEngine {
         List<ScoredDoc> scoredDocs = new ArrayList<>();
 
         for (SearchResult doc : candidates) {
-            String fullText = ((doc.getTitle() != null ? doc.getTitle() : "") + " " +
-                    (doc.getSearchText() != null ? doc.getSearchText() : "")).trim();
+            String candidateText = doc.getSearchText();
+            if (candidateText == null || candidateText.isBlank()) {
+                candidateText = (doc.getShortText() != null ? doc.getShortText() : "") + " " +
+                        (doc.getLongText() != null ? doc.getLongText() : "");
+            }
+            String fullText = resolveFullText(doc.getTitle(), candidateText);
             List<String> dTokens = tokenize(fullText);
             List<List<Float>> dVectors = embedTokens(dTokens, false);
 
@@ -130,27 +187,31 @@ public class JavaColbertEngine {
         for (String w : rawWords) {
             if (w.length() <= 1) continue;
             tokens.add(w);
-            // If word is longer than 5 chars, also produce a subword stem
-            if (w.length() > 5) {
-                tokens.add(w.substring(0, Math.min(5, w.length())));
-            }
         }
         return tokens.isEmpty() ? List.of(rawWords) : tokens;
     }
 
     private List<List<Float>> embedTokens(List<String> tokens, boolean isQuery) {
+        if (tokens == null || tokens.isEmpty()) {
+            return List.of();
+        }
+
+        // Apply document/query length caps to prevent memory bloat
+        int maxTokens = isQuery ? MAX_QUERY_TOKENS : MAX_DOC_TOKENS;
+        List<String> cappedTokens = tokens.size() > maxTokens ? tokens.subList(0, maxTokens) : tokens;
+
         List<List<Float>> vectors = new ArrayList<>();
-        int n = tokens.size();
+        int n = cappedTokens.size();
 
         for (int i = 0; i < n; i++) {
-            String token = tokens.get(i);
-            String prev = (i > 0) ? tokens.get(i - 1) : "";
-            String next = (i < n - 1) ? tokens.get(i + 1) : "";
+            String token = cappedTokens.get(i);
+            String prev = (i > 0) ? cappedTokens.get(i - 1) : "";
+            String next = (i < n - 1) ? cappedTokens.get(i + 1) : "";
 
-            // 1. Core Token Representation (80% weight) - Identical for Query and Document!
+            // 1. Core Token Representation (80% weight)
             float[] baseVec = computeSubwordVector(token, VECTOR_DIM);
 
-            // 2. Context Window (20% weight) - Subtle contextual influence from neighbors
+            // 2. Context Window (20% weight) - Contextual influence from neighbors
             float[] contextVec = new float[VECTOR_DIM];
             if (!prev.isEmpty()) {
                 float[] pVec = computeSubwordVector(prev, VECTOR_DIM);
@@ -187,22 +248,25 @@ public class JavaColbertEngine {
         // Whole word vector
         addDeterministicVector(vector, "W:" + word, 1.0f, dim);
 
+        // Concept Cluster vector (Injects semantic relatedness across synonyms/related words)
+        String concept = CONCEPT_MAP.get(word);
+        if (concept != null) {
+            addDeterministicVector(vector, concept, 0.6f, dim);
+        }
+
         // Character n-grams (3-grams and 4-grams) for morphological similarity (e.g. model ~ modelleri)
         String padded = "<" + word + ">";
-        int subwordCount = 1;
 
         if (padded.length() >= 3) {
             for (int i = 0; i <= padded.length() - 3; i++) {
                 String trigram = padded.substring(i, i + 3);
-                addDeterministicVector(vector, "TRI:" + trigram, 0.4f, dim);
-                subwordCount++;
+                addDeterministicVector(vector, "TRI:" + trigram, 0.35f, dim);
             }
         }
         if (padded.length() >= 4) {
             for (int i = 0; i <= padded.length() - 4; i++) {
                 String fourgram = padded.substring(i, i + 4);
-                addDeterministicVector(vector, "FOUR:" + fourgram, 0.3f, dim);
-                subwordCount++;
+                addDeterministicVector(vector, "FOUR:" + fourgram, 0.25f, dim);
             }
         }
 
@@ -257,7 +321,7 @@ public class JavaColbertEngine {
 
     public List<HybridExplainResponse.TokenMatch> computeTokenMatches(String query, String title, String text) {
         if (query == null || query.isBlank()) return List.of();
-        String fullText = ((title != null ? title : "") + " " + (text != null ? text : "")).trim();
+        String fullText = resolveFullText(title, text);
         if (fullText.isBlank()) return List.of();
 
         List<String> qTokens = tokenize(query);
@@ -288,6 +352,19 @@ public class JavaColbertEngine {
             }
         }
         return tokenMatches;
+    }
+
+    /**
+     * Resolves text consistently without duplicating the title if already included in text.
+     */
+    private String resolveFullText(String title, String text) {
+        if (text == null || text.isBlank()) {
+            return title != null ? title.trim() : "";
+        }
+        if (title == null || title.isBlank() || text.contains(title)) {
+            return text.trim();
+        }
+        return (title.trim() + " " + text.trim()).trim();
     }
 
     public record JavaColbertRankResult(

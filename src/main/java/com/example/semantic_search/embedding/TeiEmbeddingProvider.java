@@ -63,7 +63,7 @@ public class TeiEmbeddingProvider implements EmbeddingProvider {
             for (int i = 0; i < vector.size(); i++) {
                 embedding[i] = vector.get(i).floatValue();
             }
-            return embedding;
+            return EmbeddingProvider.normalizeL2(embedding);
 
         } catch (EmbeddingUnavailableException e) {
             throw e;

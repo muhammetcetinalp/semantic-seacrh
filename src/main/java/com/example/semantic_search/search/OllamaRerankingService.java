@@ -32,10 +32,10 @@ public class OllamaRerankingService implements RerankingService {
     public OllamaRerankingService(
             RestClient.Builder restClientBuilder,
             @Value("${search.reranking.endpoint:http://localhost:11434}") String endpoint,
-            @Value("${search.reranking.model:bge-m3}") String model) {
+            @Value("${search.reranking.model:BAAI/bge-reranker-v2-m3}") String model) {
         this.restClient = restClientBuilder.baseUrl(endpoint).build();
         this.model = model;
-        log.info("Ollama reranking active — endpoint={}, model={}", endpoint, model);
+        log.info("Cross-Encoder reranking active — endpoint={}, model={}", endpoint, model);
     }
 
     @Override
@@ -84,7 +84,7 @@ public class OllamaRerankingService implements RerankingService {
             return reranked;
 
         } catch (Exception e) {
-            log.warn("Reranking failed ({}), falling back to RRF order", e.getMessage());
+            log.warn("Cross-encoder reranking endpoint returned error ({}) — falling back to RRF ranking (Note: Ollama requires TEI or /v1/rerank proxy for cross-encoders)", e.getMessage());
             return fallback(results, topN);
         }
     }
@@ -92,8 +92,18 @@ public class OllamaRerankingService implements RerankingService {
     @Override
     public boolean isAvailable() {
         try {
-            restClient.get().uri("/api/tags").retrieve().toBodilessEntity();
-            return true;
+            try {
+                restClient.get().uri("/health").retrieve().toBodilessEntity();
+                return true;
+            } catch (Exception e1) {
+                try {
+                    restClient.get().uri("/api/tags").retrieve().toBodilessEntity();
+                    return true;
+                } catch (Exception e2) {
+                    restClient.get().uri("/").retrieve().toBodilessEntity();
+                    return true;
+                }
+            }
         } catch (Exception e) {
             return false;
         }

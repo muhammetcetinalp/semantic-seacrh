@@ -65,7 +65,7 @@ public class RestEmbeddingProvider implements EmbeddingProvider {
             for (int i = 0; i < embeddingList.size(); i++) {
                 embedding[i] = embeddingList.get(i).floatValue();
             }
-            return embedding;
+            return EmbeddingProvider.normalizeL2(embedding);
 
         } catch (EmbeddingUnavailableException e) {
             throw e;

@@ -60,6 +60,7 @@ public class SearchQueryService {
         long startTime = System.currentTimeMillis();
 
         String indexName = resolveIndexName(request.getIndexName());
+        openSearchAdapter.createIndexIfNotExists(indexName);
         int limit = resolveLimit(request.getLimit());
         int offset = request.getOffset() != null ? Math.max(0, request.getOffset()) : 0;
         SearchType searchType = resolveSearchType(request.getSearchType());
@@ -100,6 +101,7 @@ public class SearchQueryService {
     public HybridExplainResponse explainHybrid(HybridExplainRequest request) {
         long startedAt = System.currentTimeMillis();
         String indexName = resolveIndexName(request.getIndexName());
+        openSearchAdapter.createIndexIfNotExists(indexName);
         try {
             int limit = resolveLimit(request.getLimit());
             int multiplier = request.getCandidateMultiplier() == null ? 3 : request.getCandidateMultiplier();
@@ -113,10 +115,14 @@ public class SearchQueryService {
             double bm25Weight = requestedBm25Weight / weightTotal;
             double semanticWeight = requestedSemanticWeight / weightTotal;
 
-            long bm25StartedAt = System.currentTimeMillis();
-            List<SearchResult> bm25Results = openSearchAdapter.bm25Search(
-                    indexName, request.getQuery(), filters, candidateLimit);
-            long bm25TookMs = System.currentTimeMillis() - bm25StartedAt;
+            // 1. Kick off BM25 search concurrently
+            java.util.concurrent.CompletableFuture<Bm25ExecutionResult> bm25Future =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        long start = System.currentTimeMillis();
+                        List<SearchResult> hits = openSearchAdapter.bm25Search(
+                                indexName, request.getQuery(), filters, candidateLimit);
+                        return new Bm25ExecutionResult(hits, System.currentTimeMillis() - start);
+                    });
 
             boolean useColbert = "COLBERT".equalsIgnoreCase(request.getSemanticMode())
                     && colbertService.filter(ColbertService::isAvailable).isPresent();
@@ -138,7 +144,7 @@ public class SearchQueryService {
                     // 1. FAST PATH (Qdrant Multi-Vector Store): Only embed the query! No document re-embeddings!
                     List<List<Float>> queryVectors = colbertService.get().embedQuery(request.getQuery());
                     if (queryVectors != null && !queryVectors.isEmpty()) {
-                        List<QdrantSearchResult> qdrantHits = qdrantAdapter.get().searchMaxSim(queryVectors, candidateLimit);
+                        List<QdrantSearchResult> qdrantHits = qdrantAdapter.get().searchMaxSim(queryVectors, filters, candidateLimit);
                         if (qdrantHits != null && !qdrantHits.isEmpty()) {
                             log.info("ColBERT search executed via Qdrant MaxSim — returned {} hits", qdrantHits.size());
 
@@ -188,7 +194,7 @@ public class SearchQueryService {
                                             request.getQuery(), doc.getTitle(), doc.getSearchText());
                                 }
                                 ranked.add(new HybridExplainResponse.RankedResult(
-                                        i + 1, hit.score(), doc, tokenMatches
+                                         i + 1, hit.score(), doc, tokenMatches
                                 ));
                             }
                             colbertDocs = orderedDocs;
@@ -200,8 +206,9 @@ public class SearchQueryService {
                 // Fallback to on-the-fly candidate scoring if Qdrant returned no results (e.g. not synced yet)
                 // Prioritize BM25 keyword candidates for the query over arbitrary match_all documents
                 if (colbertDocs == null) {
-                    List<SearchResult> candidatePool = !bm25Results.isEmpty()
-                            ? bm25Results
+                    List<SearchResult> bm25Candidates = bm25Future.join().results();
+                    List<SearchResult> candidatePool = !bm25Candidates.isEmpty()
+                            ? bm25Candidates
                             : openSearchAdapter.getCandidates(indexName, filters, candidateLimit * 2);
                     var colbertRank = colbertService.get().scoreAndRank(request.getQuery(), candidatePool, candidateLimit);
                     colbertDocs = colbertRank.orderedDocuments();
@@ -218,6 +225,11 @@ public class SearchQueryService {
                 rankedSemantic = rank(semanticResults);
             }
             long semanticTookMs = System.currentTimeMillis() - semanticStartedAt;
+
+            // Wait for BM25 result
+            Bm25ExecutionResult bm25Exec = bm25Future.join();
+            List<SearchResult> bm25Results = bm25Exec.results();
+            long bm25TookMs = bm25Exec.tookMs();
 
             List<HybridExplainResponse.RankedResult> rankedBm25 = rank(bm25Results);
             List<HybridExplainResponse.FusionResult> finalResults = fuse(
@@ -356,4 +368,6 @@ public class SearchQueryService {
         }
         return filters;
     }
+
+    private record Bm25ExecutionResult(List<SearchResult> results, long tookMs) {}
 }

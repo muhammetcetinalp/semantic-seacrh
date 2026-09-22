@@ -75,7 +75,7 @@ public class OpenSearchAdapter {
                                         .analyzer("turkish_search", an -> an
                                                 .custom(cu -> cu
                                                         .tokenizer("standard")
-                                                        .filter("lowercase", "apostrophe",
+                                                        .filter("apostrophe", "lowercase",
                                                                 "turkish_stop", "turkish_stemmer")))
                                         .filter("turkish_stop", f -> f
                                                 .definition(fd -> fd
@@ -300,8 +300,16 @@ public class OpenSearchAdapter {
         int safeOffset = Math.max(0, offset);
         int fetchLimit = Math.min((limit + safeOffset) * 3, 100);
 
-        List<SearchResult> bm25Results = bm25Search(indexName, queryText, filters, fetchLimit, 0);
-        List<SearchResult> vectorResults = vectorSearch(indexName, queryVector, filters, fetchLimit, 0);
+        java.util.concurrent.CompletableFuture<List<SearchResult>> bm25Future =
+                java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                        bm25Search(indexName, queryText, filters, fetchLimit, 0));
+
+        java.util.concurrent.CompletableFuture<List<SearchResult>> vectorFuture =
+                java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                        vectorSearch(indexName, queryVector, filters, fetchLimit, 0));
+
+        List<SearchResult> bm25Results = bm25Future.join();
+        List<SearchResult> vectorResults = vectorFuture.join();
 
         List<SearchResult> fused = applyReciprocalRankFusion(bm25Results, vectorResults, fetchLimit);
         if (safeOffset > 0) {
@@ -403,9 +411,50 @@ public class OpenSearchAdapter {
     private void addFilters(BoolQuery.Builder boolBuilder, Map<String, Object> filters) {
         if (filters == null || filters.isEmpty()) return;
 
+        // 1. Geo-distance filter on 'konum' (lat, lon, radiusKm/radius)
+        if (filters.containsKey("lat") && filters.containsKey("lon")) {
+            try {
+                double lat = Double.parseDouble(filters.get("lat").toString());
+                double lon = Double.parseDouble(filters.get("lon").toString());
+                double radiusKm = 50.0;
+                if (filters.containsKey("radiusKm")) {
+                    radiusKm = Double.parseDouble(filters.get("radiusKm").toString());
+                } else if (filters.containsKey("radius")) {
+                    radiusKm = Double.parseDouble(filters.get("radius").toString());
+                }
+                final String distanceStr = radiusKm + "km";
+                boolBuilder.filter(f -> f.geoDistance(g -> g
+                        .field("konum")
+                        .distance(distanceStr)
+                        .location(loc -> loc.latlon(ll -> ll.lat(lat).lon(lon)))
+                ));
+            } catch (Exception e) {
+                log.warn("Failed to apply geo_distance filter: {}", e.getMessage());
+            }
+        }
+
+        // 2. Date range filter on 'tarih' (startDate, endDate)
+        if (filters.containsKey("startDate") || filters.containsKey("endDate")) {
+            boolBuilder.filter(f -> f.range(r -> {
+                var rb = r.field("tarih");
+                if (filters.containsKey("startDate")) {
+                    rb.gte(JsonData.of(filters.get("startDate").toString()));
+                }
+                if (filters.containsKey("endDate")) {
+                    rb.lte(JsonData.of(filters.get("endDate").toString()));
+                }
+                return rb;
+            }));
+        }
+
+        Set<String> specialHandledKeys = Set.of("lat", "lon", "radiusKm", "radius", "startDate", "endDate");
+
         for (Map.Entry<String, Object> entry : filters.entrySet()) {
             String field = entry.getKey();
+            if (specialHandledKeys.contains(field)) continue;
+
             Object value = entry.getValue();
+            if (value == null) continue;
 
             if (value instanceof List<?> listValue) {
                 List<FieldValue> fieldValues = listValue.stream()
