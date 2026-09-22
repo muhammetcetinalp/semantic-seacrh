@@ -367,6 +367,8 @@ public class OpenSearchAdapter {
                         .query(queryText)
                         .fields("title^2", "shortText^1.5", "searchText", "longText", "adres", "birim", "tags^1.5")
                         .analyzer("turkish_search")
+                        .fuzziness("AUTO")
+                        .minimumShouldMatch("75%")
                 )
         );
 
