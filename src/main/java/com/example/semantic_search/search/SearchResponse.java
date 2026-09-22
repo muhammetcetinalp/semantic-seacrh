@@ -1,53 +1,23 @@
 package com.example.semantic_search.search;
 
+import com.example.semantic_search.dto.SearchResult;
+import com.example.semantic_search.model.SearchType;
+
 import java.util.List;
 
-public class SearchResponse {
-
-    private List<SearchResult> results;
-    private long totalHits;
-    private long tookMs;
-    private SearchType searchType;
+/**
+ * Arama yanıtı DTO'su.
+ *
+ * @deprecated Bu sınıf {@link com.example.semantic_search.dto.SearchResponse} paketine taşınmıştır.
+ */
+@Deprecated
+public class SearchResponse extends com.example.semantic_search.dto.SearchResponse {
 
     public SearchResponse() {
+        super();
     }
 
     public SearchResponse(List<SearchResult> results, long totalHits, long tookMs, SearchType searchType) {
-        this.results = results;
-        this.totalHits = totalHits;
-        this.tookMs = tookMs;
-        this.searchType = searchType;
-    }
-
-    public List<SearchResult> getResults() {
-        return results;
-    }
-
-    public void setResults(List<SearchResult> results) {
-        this.results = results;
-    }
-
-    public long getTotalHits() {
-        return totalHits;
-    }
-
-    public void setTotalHits(long totalHits) {
-        this.totalHits = totalHits;
-    }
-
-    public long getTookMs() {
-        return tookMs;
-    }
-
-    public void setTookMs(long tookMs) {
-        this.tookMs = tookMs;
-    }
-
-    public SearchType getSearchType() {
-        return searchType;
-    }
-
-    public void setSearchType(SearchType searchType) {
-        this.searchType = searchType;
+        super(results, totalHits, tookMs, searchType);
     }
 }

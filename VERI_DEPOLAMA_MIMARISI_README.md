@@ -1,6 +1,6 @@
 # 🗄️ Veri Depolama, Haritalama ve İndeksleme Mimarisi
 
-Bu doküman, sistemdeki **ham verinin (olaylar.json, Kafka Olayları, REST API)** sistem tarafından nasıl okunduğunu, hangi katmanda ne formatta dönüştürüldüğünü ve **Oracle 23ai**, **OpenSearch** ile **Qdrant** veritabanlarına nasıl kaydedildiğini adım adım ve teknik detaylarıyla açıklamaktadır.
+Bu doküman, sistemdeki **ham verinin (olaylar.json, Kafka Olayları, REST API)** sistem tarafından nasıl okunduğunu, hangi katmanda ne formatta dönüştürüldüğünü ve **PostgreSQL**, **OpenSearch** ile **Qdrant** veritabanlarına nasıl kaydedildiğini adım adım ve teknik detaylarıyla açıklamaktadır.
 
 ---
 
@@ -23,9 +23,9 @@ flowchart TD
         Doc --> ColbertGen[ColbertService<br/>Token-Level 128-dim Çoklu Vektör]
     end
 
-    subgraph DB1 [1. Oracle 23ai - Durum & Denetim]
-        Doc -->|State & Audit| OraState[(indexing_state Tablosu<br/>SHA-256 Hash, JSON CLOB, Sürüm)]
-        Doc -.->|Arama Geçmişi| OraLog[(search_query_log Tablosu<br/>CLOB Arama Kayıtları)]
+    subgraph DB1 [1. PostgreSQL - Durum & Denetim]
+        Doc -->|State & Audit| PgState[(indexing_state Tablosu<br/>SHA-256 Hash, JSON TEXT, Sürüm)]
+        Doc -.->|Arama Geçmişi| PgLog[(search_query_log Tablosu<br/>TEXT Arama Kayıtları)]
     end
 
     subgraph DB2 [2. OpenSearch - Hibrit Metin & k-NN]
@@ -65,27 +65,27 @@ Sisteme giren ham olay dökümanı şu şekildedir:
 
 ---
 
-## 🏛️ 3. Oracle 23ai Veri Modeli ve Saklama Formatı
+## 🏛️ 3. PostgreSQL Veri Modeli ve Saklama Formatı
 
-Oracle, sistemin **Single Source of Truth (Tek Gerçek Kaynak)** ve **İşlemsel Denetim (Audit & State Engine)** katmanıdır. İki temel tabloda veri tutulur:
+PostgreSQL, sistemin **Single Source of Truth (Tek Gerçek Kaynak)** ve **İşlemsel Denetim (Audit & State Engine)** katmanıdır. İki temel tabloda veri tutulur:
 
 ### A. `indexing_state` Tablosu (Döküman Durumu ve Idempotency)
-Dökümanların indekslenme durumu, Kafka versiyon takibi ve OpenSearch'e gönderilen kaynak verinin bir kopyası JSON CLOB olarak burada saklanır.
+Dökümanların indekslenme durumu, Kafka versiyon takibi ve OpenSearch'e gönderilen kaynak verinin bir kopyası JSON TEXT olarak burada saklanır.
 
 | Kolon Adı | Veri Tipi | Kısıt / Özellik | Açıklama |
 | :--- | :--- | :--- | :--- |
-| `id` | `NUMBER(19, 0)` | `PRIMARY KEY` (Sequence: `indexing_state_seq`) | Otomatik artan kayıt no |
-| `document_id` | `VARCHAR2(255 CHAR)` | `NOT NULL` | Olayın benzersiz ID'si (`entityId`) |
-| `index_name` | `VARCHAR2(255 CHAR)` | `NOT NULL` | Hedef indeks adı (örn: `olaylar`) |
-| `status` | `VARCHAR2(50 CHAR)` | `NOT NULL` | Durum: `INDEXED`, `DELETED`, `FAILED`, `PENDING` |
-| `search_text_hash` | `VARCHAR2(64 CHAR)` | Nullable | Arama metninin SHA-256 hash'i (Gereksiz yeniden vektörlemeyi önler) |
-| `last_event_id` | `VARCHAR2(128 CHAR)` | Nullable | İşlenen son Kafka olayı ID'si |
-| `last_event_version` | `NUMBER(19, 0)` | Nullable | Olay versiyonu (Eski/sırasız gelen Kafka olaylarını engeller) |
-| `document_source` | `CLOB` | `CHECK (document_source IS JSON)` | OpenSearch'e basılan JSON'un Oracle içindeki birebir kopyası |
-| `error_message` | `CLOB` | Nullable | Olası indeksleme hatasının stack trace'i |
-| `retry_count` | `NUMBER(10, 0)` | Default 0 | Hata durumundaki tekrar deneme adedi |
-| `created_at` | `TIMESTAMP(6) WITH TIME ZONE` | Default `SYSTIMESTAMP` | Kayıt tarihi |
-| `updated_at` | `TIMESTAMP(6) WITH TIME ZONE` | Default `SYSTIMESTAMP` | Son güncelleme |
+| `id` | `BIGINT` | `PRIMARY KEY` (Sequence: `indexing_state_seq`) | Otomatik artan kayıt no |
+| `document_id` | `VARCHAR(255)` | `NOT NULL` | Olayın benzersiz ID'si (`entityId`) |
+| `index_name` | `VARCHAR(255)` | `NOT NULL` | Hedef indeks adı (örn: `olaylar`) |
+| `status` | `VARCHAR(50)` | `NOT NULL` | Durum: `INDEXED`, `DELETED`, `FAILED`, `PENDING` |
+| `search_text_hash` | `VARCHAR(64)` | Nullable | Arama metninin SHA-256 hash'i (Gereksiz yeniden vektörlemeyi önler) |
+| `last_event_id` | `VARCHAR(128)` | Nullable | İşlenen son Kafka olayı ID'si |
+| `last_event_version` | `BIGINT` | Nullable | Olay versiyonu (Eski/sırasız gelen Kafka olaylarını engeller) |
+| `document_source` | `TEXT` | Nullable | OpenSearch'e basılan JSON'un PostgreSQL içindeki birebir kopyası |
+| `error_message` | `TEXT` | Nullable | Olası indeksleme hatasının stack trace'i |
+| `retry_count` | `INT` | Default 0 | Hata durumundaki tekrar deneme adedi |
+| `created_at` | `TIMESTAMPTZ` | Default `CURRENT_TIMESTAMP` | Kayıt tarihi |
+| `updated_at` | `TIMESTAMPTZ` | Default `CURRENT_TIMESTAMP` | Son güncelleme |
 
 > **Benzersizlik Kısıtı (Unique Constraint)**:  
 > `CONSTRAINT uq_document_index UNIQUE (document_id, index_name)`  
@@ -94,7 +94,7 @@ Dökümanların indekslenme durumu, Kafka versiyon takibi ve OpenSearch'e gönde
 ---
 
 ### B. `search_query_log` Tablosu (Sorgu ve Model Açıklanabilirlik Günlüğü)
-Kullanıcıların `/api/v1/search` ve `/api/v1/search/explain` üzerinden attığı her sorgunun teknik detayı Oracle'da JSON CLOB olarak arşivlenir.
+Kullanıcıların `/api/v1/search` ve `/api/v1/search/explain` üzerinden attığı her sorgunun teknik detayı PostgreSQL'de TEXT olarak arşivlenir.
 
 | Kolon Adı | Veri Tipi | Açıklama |
 | :--- | :--- | :--- |
@@ -135,7 +135,6 @@ OpenSearch, **Metin Arama (BM25)**, **Coğrafi Konum Filtreleme (GeoPoint)** ve 
 | `adres` | `text` | `analyzer: turkish_search`, alt alan: `adres.keyword` |
 | `tarih` | `date` | Olayın gerçekleştiği ISO 8601 zaman damgası |
 | `konum` | `geo_point` | Enlem/Boylam koordinatları (`{ "lat": 41.4146, "lon": 29.1387 }`) |
-| `tags` | `keyword` | Etiket dizisi (örn: `["Deniz Trafiği Takibi", "Hücumbot"]`) |
 | `embedding` | `knn_vector` | **1024 boyutlu Dense Vektör**<br/>Engine: `faiss`<br/>Uzay Tipi: `cosinesimil`<br/>Metot: `hnsw` (`ef_construction: 256`, `m: 16`) |
 
 ### C. OpenSearch'e Basılan Örnek JSON Dokümanı
@@ -154,7 +153,6 @@ OpenSearch, **Metin Arama (BM25)**, **Coğrafi Konum Filtreleme (GeoPoint)** ve 
     "lat": 41.4146,
     "lon": 29.1387
   },
-  "tags": ["Deniz Trafiği Takibi", "Hücumbot Filotilla Komutanlığı"],
   "createdAt": "2026-09-20T22:00:00Z",
   "updatedAt": "2026-09-20T22:00:00Z",
   "embedding": [0.0142, -0.0521, 0.0891, "...(toplam 1024 float float sayı)..."]
@@ -202,8 +200,7 @@ Her bir olay dökümanı için Qdrant'ta bir Point oluşturulur:
         "type": "Deniz Trafiği Takibi",
         "adres": "İstanbul Boğazı Kuzey Girişi, İstanbul açıkları...",
         "tarih": "2025-08-01T00:08:00Z",
-        "konum": "41.4146, 29.1387",
-        "tags": ["Deniz Trafiği Takibi", "Hücumbot Filotilla Komutanlığı"]
+        "konum": "41.4146, 29.1387"
       }
     }
   ]
@@ -214,13 +211,13 @@ Her bir olay dökümanı için Qdrant'ta bir Point oluşturulur:
 
 ## 🔄 6. Karşılaştırma Özeti: Hangi Veri Nerede Tutuluyor?
 
-| Alan / Özellik | Oracle 23ai (`indexing_state`) | OpenSearch (`olaylar`) | Qdrant (`colbert_olaylar`) |
+| Alan / Özellik | PostgreSQL (`indexing_state`) | OpenSearch (`olaylar`) | Qdrant (`colbert_olaylar`) |
 | :--- | :--- | :--- | :--- |
 | **Rolü** | Durum, Audit, Versiyon Kilidi | Ana Arama, BM25, GeoPoint, Dense HNSW | Token-level MaxSim Rerank |
 | **Kimlik (ID)** | `document_id` (String) | `id` (Keyword) | Deterministik UUID (Olay ID'sinden) |
-| **Metin Verisi** | `document_source` (CLOB JSON) | `searchText`, `title`, `longText` (Turkish Text) | Payload içinde `title`, `searchText` vb. |
+| **Metin Verisi** | `document_source` (TEXT JSON) | `searchText`, `title`, `longText` (Turkish Text) | Payload içinde `title`, `searchText` vb. |
 | **Vektör Verisi** | Tutulmaz (Yalnızca SHA-256 Hash) | **1024-dim Dense Vektör** (Dökümanın tümü için tek vektör) | **N x 128-dim Multi-Vektör** (Her token için ayrı vektör) |
 | **Coğrafi Bilgi** | JSON içinde metin | **`geo_point`** (`lat`, `lon` sayısal indeksli) | Payload içinde string |
 | **Silme Yönetimi** | `status = 'DELETED'` (Soft-delete) | Hard-delete (`DELETE /olaylar/_doc/{id}`) | Hard-delete (`POST /points/delete`) |
 
-Bu üçlü mimari sayesinde sistem, hem kurumsal ilişkisel veritabanı güvenliğini (Oracle ACID) hem geniş ölçekli metin aramasını (OpenSearch) hem de son teknoloji çoklu vektör anlamsal eşleştirmesini (ColBERT + Qdrant) sıfır veri kaybı ile yürütmektedir.
+Bu üçlü mimari sayesinde sistem, hem kurumsal ilişkisel veritabanı güvenliğini (PostgreSQL ACID) hem geniş ölçekli metin aramasını (OpenSearch) hem de son teknoloji çoklu vektör anlamsal eşleştirmesini (ColBERT + Qdrant) sıfır veri kaybı ile yürütmektedir.

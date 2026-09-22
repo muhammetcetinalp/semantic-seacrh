@@ -1,16 +1,16 @@
 CREATE SEQUENCE indexing_state_seq START WITH 1 INCREMENT BY 1;
 
 CREATE TABLE indexing_state (
-    id               NUMBER(19, 0) DEFAULT indexing_state_seq.NEXTVAL PRIMARY KEY,
-    document_id      VARCHAR2(255 CHAR) NOT NULL,
-    index_name       VARCHAR2(255 CHAR) NOT NULL,
-    status           VARCHAR2(50 CHAR) DEFAULT 'PENDING' NOT NULL,
-    search_text_hash VARCHAR2(64 CHAR),
-    last_indexed_at   TIMESTAMP(6) WITH TIME ZONE,
-    error_message    CLOB,
-    retry_count      NUMBER(10, 0) DEFAULT 0 NOT NULL,
-    created_at       TIMESTAMP(6) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    updated_at       TIMESTAMP(6) WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    id               BIGINT DEFAULT nextval('indexing_state_seq') PRIMARY KEY,
+    document_id      VARCHAR(255) NOT NULL,
+    index_name       VARCHAR(255) NOT NULL,
+    status           VARCHAR(50) DEFAULT 'PENDING' NOT NULL,
+    search_text_hash VARCHAR(64),
+    last_indexed_at  TIMESTAMPTZ,
+    error_message    TEXT,
+    retry_count      INT DEFAULT 0 NOT NULL,
+    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
     CONSTRAINT uq_document_index UNIQUE (document_id, index_name)
 );
 

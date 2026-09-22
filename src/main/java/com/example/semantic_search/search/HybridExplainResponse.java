@@ -30,7 +30,14 @@ public record HybridExplainResponse(
             double bm25Weight,
             double semanticWeight,
             List<String> types,
-            Map<String, Object> filters) { }
+            Map<String, Object> filters,
+            String fusionMode) {
+
+        public HybridSettings(int limit, int candidateLimit, int candidateMultiplier, int rankConstant,
+                              double bm25Weight, double semanticWeight, List<String> types, Map<String, Object> filters) {
+            this(limit, candidateLimit, candidateMultiplier, rankConstant, bm25Weight, semanticWeight, types, filters, "RRF");
+        }
+    }
 
     public record SearchStage(String method, long tookMs, List<RankedResult> results) { }
 
@@ -49,7 +56,15 @@ public record HybridExplainResponse(
             Integer semanticRank,
             double bm25Contribution,
             double semanticContribution,
-            SearchResult document) { }
+            SearchResult document,
+            Double normalizedBm25Score,
+            Double normalizedSemanticScore) {
+
+        public FusionResult(int finalRank, double rrfScore, Integer bm25Rank, Integer semanticRank,
+                            double bm25Contribution, double semanticContribution, SearchResult document) {
+            this(finalRank, rrfScore, bm25Rank, semanticRank, bm25Contribution, semanticContribution, document, null, null);
+        }
+    }
 
     public record RerankStage(
             String model,

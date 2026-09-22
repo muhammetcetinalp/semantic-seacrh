@@ -9,7 +9,6 @@ export type SearchDocument = {
   adres?: string | null;
   tarih?: string | null;
   konum?: any;
-  tags?: string[] | null;
   metadata?: Record<string, unknown> | null;
   structuredFields?: Record<string, unknown> | null;
   createdAt?: string | null;
@@ -44,6 +43,8 @@ export type FusionResult = {
   bm25Contribution: number;
   semanticContribution: number;
   document: SearchDocument;
+  normalizedBm25Score?: number | null;
+  normalizedSemanticScore?: number | null;
 };
 
 export type RerankedFusionResult = {
@@ -71,6 +72,7 @@ export type HybridSettings = {
   semanticWeight: number;
   types: string[];
   filters: Record<string, unknown>;
+  fusionMode?: "SCORE_NORMALIZATION" | "RRF" | string;
 };
 
 export type HybridExplainResponse = {
@@ -108,4 +110,5 @@ export type HybridExplainRequest = {
   types?: string[];
   filters?: Record<string, unknown>;
   semanticMode?: "DENSE" | "COLBERT";
+  fusionMode?: string;
 };

@@ -1,6 +1,7 @@
 package com.example.semantic_search.opensearch;
 
-import com.example.semantic_search.indexing.SearchDocument;
+import com.example.semantic_search.client.opensearch.OpenSearchDocumentSourceMapper;
+import com.example.semantic_search.model.SearchDocument;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -23,7 +24,6 @@ class OpenSearchDocumentSourceMapperTest {
                 .type("entity")
                 .title("Radar")
                 .searchText("long range radar")
-                .tags(List.of("radar"))
                 .metadata(Map.of("source", "kafka"))
                 .structuredFields(Map.of("region", "ANKARA", "priority", 5))
                 .embedding(new float[]{0.1f, 0.2f})

@@ -1,8 +1,15 @@
 package com.example.semantic_search.kafka;
 
-import com.example.semantic_search.embedding.EmbeddingProvider;
-import com.example.semantic_search.indexing.*;
-import com.example.semantic_search.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.client.embedding.EmbeddingProvider;
+import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.config.KafkaIndexingProperties;
+import com.example.semantic_search.dto.IndexDocumentRequest;
+import com.example.semantic_search.model.IndexingState;
+import com.example.semantic_search.model.IndexingStatus;
+import com.example.semantic_search.model.SearchIndexingEvent;
+import com.example.semantic_search.repository.IndexingStateRepository;
+import com.example.semantic_search.service.IndexingService;
+import com.example.semantic_search.service.SearchEventProcessor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;

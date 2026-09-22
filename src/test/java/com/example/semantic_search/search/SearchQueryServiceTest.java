@@ -1,8 +1,16 @@
 package com.example.semantic_search.search;
 
-import com.example.semantic_search.configuration.SearchProperties;
-import com.example.semantic_search.embedding.EmbeddingProvider;
-import com.example.semantic_search.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.client.embedding.EmbeddingProvider;
+import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.config.SearchProperties;
+import com.example.semantic_search.dto.HybridExplainRequest;
+import com.example.semantic_search.dto.HybridExplainResponse;
+import com.example.semantic_search.dto.SearchRequest;
+import com.example.semantic_search.dto.SearchResponse;
+import com.example.semantic_search.dto.SearchResult;
+import com.example.semantic_search.model.SearchType;
+import com.example.semantic_search.service.SearchQueryLogService;
+import com.example.semantic_search.service.SearchQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -198,6 +206,7 @@ class SearchQueryServiceTest {
         request.setBm25Weight(0.25);
         request.setSemanticWeight(0.75);
         request.setFilters(Map.of("region", "ANKARA"));
+        request.setFusionMode("RRF");
 
         SearchResult a = result("a", "Radar Alpha", 8.4);
         SearchResult b = result("b", "Gözetleme Birimi", 6.1);
@@ -216,6 +225,7 @@ class SearchQueryServiceTest {
         assertThat(response.settings().candidateLimit()).isEqualTo(6);
         assertThat(response.settings().bm25Weight()).isEqualTo(0.25);
         assertThat(response.settings().semanticWeight()).isEqualTo(0.75);
+        assertThat(response.settings().fusionMode()).isEqualTo("RRF");
         assertThat(response.bm25().results()).extracting(HybridExplainResponse.RankedResult::rank)
                 .containsExactly(1, 2);
         assertThat(response.bm25().results()).extracting(item -> item.document().getId())
@@ -231,6 +241,40 @@ class SearchQueryServiceTest {
         assertThat(response.finalResults().getFirst().semanticContribution())
                 .isCloseTo(0.75 / 11, org.assertj.core.data.Offset.offset(0.000001));
         assertThat(response.totalCandidates()).isEqualTo(3);
+    }
+
+    @Test
+    void explainHybrid_shouldApplyScoreNormalizationFusion() {
+        HybridExplainRequest request = new HybridExplainRequest();
+        request.setQuery("hava savunma");
+        request.setLimit(3);
+        request.setBm25Weight(0.5);
+        request.setSemanticWeight(0.5);
+        request.setFusionMode("RRF");
+
+        SearchResult a = result("a", "Savunma Sistemi A", 10.0);
+        SearchResult b = result("b", "Savunma Sistemi B", 5.0);
+        SearchResult semanticB = result("b", "Savunma Sistemi B", 0.80);
+        SearchResult c = result("c", "Savunma Sistemi C", 0.40);
+        float[] vector = new float[]{0.1f, 0.2f};
+
+        when(openSearchAdapter.bm25Search("entities", request.getQuery(), Map.of(), 9))
+                .thenReturn(List.of(a, b));
+        when(embeddingProvider.generateEmbedding(request.getQuery())).thenReturn(vector);
+        when(openSearchAdapter.vectorSearch("entities", vector, Map.of(), 9))
+                .thenReturn(List.of(semanticB, c));
+
+        HybridExplainResponse response = searchQueryService.explainHybrid(request);
+
+        assertThat(response.settings().fusionMode()).isEqualTo("RRF");
+        assertThat(response.finalResults()).extracting(item -> item.document().getId())
+                .containsExactly("b", "a", "c");
+
+        HybridExplainResponse.FusionResult first = response.finalResults().getFirst();
+        assertThat(first.document().getId()).isEqualTo("b");
+        assertThat(first.bm25Contribution()).isCloseTo(0.5 / 62.0, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(first.semanticContribution()).isCloseTo(0.5 / 61.0, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(first.rrfScore()).isCloseTo((0.5 / 62.0) + (0.5 / 61.0), org.assertj.core.data.Offset.offset(0.0001));
     }
 
     @Test

@@ -54,7 +54,7 @@ export interface KafkaSimulationStatus {
   bootstrapServers: string;
   status: string;
   lastEventSummary: string;
-  oracleRecordedCount: number;
+  dbRecordedCount: number;
 }
 
 export async function startKafkaSimulation(limit = 1000, delayMs = 50): Promise<any> {

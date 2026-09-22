@@ -72,7 +72,7 @@ sequenceDiagram
     participant K as Kafka (olaylar-events)
     participant L as KafkaIndexingListener
     participant P as SearchEventProcessor
-    participant O as Oracle 23ai (indexing_state)
+    participant O as PostgreSQL (indexing_state)
     participant OS as OpenSearch (olaylar)
     participant Q as Qdrant (colbert_olaylar)
 
@@ -106,7 +106,7 @@ sequenceDiagram
 Ağ kesintisi veya consumer yeniden başlama durumlarında Kafka aynı mesajı 2 kere teslim edebilir (`at-least-once`). Sistem bu durumu şu adımlarla çözer:
 1. **Satır Düzeyinde Kilit (`FOR UPDATE`)**:
    `repository.findByDocumentIdAndIndexNameForUpdate(documentId, route.indexName())`  
-   Oracle tablosundaki satır kilitlenir. Aynı dökümana ait başka bir Kafka partition veya thread aynı anda işlem yapamaz, sıraya girer.
+   PostgreSQL tablosundaki satır kilitlenir. Aynı dökümana ait başka bir Kafka partition veya thread aynı anda işlem yapamaz, sıraya girer.
 2. **Versiyon Kontrolü (Out-of-Order Korunması)**:
    ```java
    if (state.getLastEventVersion() != null && event.version() <= state.getLastEventVersion()) {

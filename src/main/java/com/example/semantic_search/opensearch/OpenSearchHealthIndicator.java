@@ -1,23 +1,14 @@
 package com.example.semantic_search.opensearch;
 
-import org.springframework.boot.health.contributor.Health;
-import org.springframework.boot.health.contributor.HealthIndicator;
-import org.springframework.stereotype.Component;
+/**
+ * OpenSearch sağlık göstergesi.
+ *
+ * @deprecated Bu sınıf {@link com.example.semantic_search.client.opensearch.OpenSearchHealthIndicator} paketine taşınmıştır.
+ */
+@Deprecated
+public class OpenSearchHealthIndicator extends com.example.semantic_search.client.opensearch.OpenSearchHealthIndicator {
 
-@Component
-public class OpenSearchHealthIndicator implements HealthIndicator {
-
-    private final OpenSearchAdapter adapter;
-
-    public OpenSearchHealthIndicator(OpenSearchAdapter adapter) {
-        this.adapter = adapter;
-    }
-
-    @Override
-    public Health health() {
-        if (adapter.isHealthy()) {
-            return Health.up().withDetail("engine", "OpenSearch").build();
-        }
-        return Health.down().withDetail("engine", "OpenSearch").build();
+    public OpenSearchHealthIndicator(com.example.semantic_search.client.opensearch.OpenSearchAdapter adapter) {
+        super(adapter);
     }
 }

@@ -1,9 +1,15 @@
 package com.example.semantic_search.indexing;
 
-import com.example.semantic_search.configuration.SearchProperties;
-import com.example.semantic_search.embedding.EmbeddingProvider;
-import com.example.semantic_search.opensearch.OpenSearchAdapter;
-import com.example.semantic_search.opensearch.OpenSearchDocumentSourceMapper;
+import com.example.semantic_search.client.embedding.EmbeddingProvider;
+import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.client.opensearch.OpenSearchDocumentSourceMapper;
+import com.example.semantic_search.config.SearchProperties;
+import com.example.semantic_search.dto.IndexDocumentRequest;
+import com.example.semantic_search.model.IndexingState;
+import com.example.semantic_search.model.IndexingStatus;
+import com.example.semantic_search.model.SearchDocument;
+import com.example.semantic_search.repository.IndexingStateRepository;
+import com.example.semantic_search.service.IndexingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

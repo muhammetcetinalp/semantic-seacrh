@@ -1,7 +1,9 @@
 package com.example.semantic_search.opensearch;
 
-import com.example.semantic_search.configuration.EmbeddingProperties;
-import com.example.semantic_search.search.SearchResult;
+import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.client.opensearch.OpenSearchDocumentSourceMapper;
+import com.example.semantic_search.config.EmbeddingProperties;
+import com.example.semantic_search.dto.SearchResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,8 +29,9 @@ class OpenSearchAdapterTest {
     void setUp() {
         embeddingProperties = new EmbeddingProperties();
         embeddingProperties.setDimensions(384);
+        var objectMapper = JsonMapper.builder().build();
         adapter = new OpenSearchAdapter(openSearchClient, embeddingProperties,
-                new OpenSearchDocumentSourceMapper(JsonMapper.builder().build()));
+                new OpenSearchDocumentSourceMapper(objectMapper), objectMapper);
     }
 
     @Test
@@ -64,6 +67,23 @@ class OpenSearchAdapterTest {
         assertThat(rrfDoc2).isGreaterThan(rrfDoc1);
         assertThat(rrfDoc1).isGreaterThan(rrfDoc4);
         assertThat(rrfDoc4).isGreaterThan(rrfDoc3);
+    }
+
+    @Test
+    void normalizedScoreFusion_shouldNormalizeAndCombineScores() {
+        SearchResult bm25_1 = result("doc-1", 10.0);
+        SearchResult bm25_2 = result("doc-2", 5.0);
+
+        SearchResult vec_2 = result("doc-2", 0.80);
+        SearchResult vec_3 = result("doc-3", 0.40);
+
+        List<SearchResult> fused = adapter.applyNormalizedScoreFusion(
+                List.of(bm25_1, bm25_2), List.of(vec_2, vec_3), 0.5, 0.5, 10);
+
+        assertThat(fused).extracting(SearchResult::getId).containsExactly("doc-2", "doc-1", "doc-3");
+        assertThat(fused.get(0).getScore()).isCloseTo(0.75, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(fused.get(1).getScore()).isCloseTo(0.50, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(fused.get(2).getScore()).isCloseTo(0.25, org.assertj.core.data.Offset.offset(0.0001));
     }
 
     @Test

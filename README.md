@@ -1,6 +1,6 @@
 # 🚀 Semantic Search Lab — Sıfırdan Kurulum ve Mimari Rehberi
 
-Bu proje; **Java 21**, **Spring Boot 4.x**, **OpenSearch 3.8.0**, **Qdrant Multi-Vector DB**, **Oracle 23ai Free**, **Apache Kafka (KRaft)** ve **React Vite** arayüzü kullanan, iki aşamalı (Two-Stage Retrieval) kurumsal bir hibrit arama motorudur.
+Bu proje; **Java 21**, **Spring Boot 4.x**, **OpenSearch 3.8.0**, **Qdrant Multi-Vector DB**, **PostgreSQL 17 (Alpine)**, **Apache Kafka (KRaft)** ve **React Vite** arayüzü kullanan, iki aşamalı (Two-Stage Retrieval) kurumsal bir hibrit arama motorudur.
 
 > [!NOTE]
 > **%100 Saf Java & Docker (Sıfır Python Bağımlılığı):**  
@@ -22,7 +22,7 @@ Bu proje; **Java 21**, **Spring Boot 4.x**, **OpenSearch 3.8.0**, **Qdrant Multi
 > 💡 **Derinlemesine Teknik Mimari Rehberleri:**  
 > Projenin tüm iç işleyişi 3 ayrı uzmanlaşmış rehberde detaylandırılmıştır:
 > 1. 🔍 **[ARAMA_MIMARISI_README.md](ARAMA_MIMARISI_README.md)**: Kullanıcı sorgu yazdığında isteğin uçtan uca akışı, BM25, Dense Vector, ColBERT MaxSim, RRF Füzyonu ve Saf Java Cross-Encoder Reranker yaşam döngüsü.
-> 2. 🗄️ **[VERI_DEPOLAMA_MIMARISI_README.md](VERI_DEPOLAMA_MIMARISI_README.md)**: Oracle 23ai (`indexing_state`, `search_query_log`), OpenSearch (`olaylar`, Turkish Analyzer, GeoPoint, 1024-dim HNSW) ve Qdrant (`colbert_olaylar`, Multi-Vector) veri modelleri ve saklama formatları.
+> 2. 🗄️ **[VERI_DEPOLAMA_MIMARISI_README.md](VERI_DEPOLAMA_MIMARISI_README.md)**: PostgreSQL (`indexing_state`, `search_query_log`), OpenSearch (`olaylar`, Turkish Analyzer, GeoPoint, 1024-dim HNSW) ve Qdrant (`colbert_olaylar`, Multi-Vector) veri modelleri ve saklama formatları.
 > 3. 🛰️ **[KAFKA_VE_OLAY_AKISI_README.md](KAFKA_VE_OLAY_AKISI_README.md)**: Apache Kafka KRaft altyapısı, dağıtık Idempotency (çift kayıt önleme), `SELECT FOR UPDATE` kilitlemesi, sürüm takibi ve canlı simülasyon producer motoru.
 
 ---
@@ -79,7 +79,7 @@ source ~/.bashrc
 
 ### Adım 2.3: Docker Engine ve Docker Compose (Plugin) Kurulumu
 
-Oracle 23ai, OpenSearch, Qdrant ve Kafka konteynerlerini çalıştırmak için Docker Engine ve `compose` eklentisi kurulmalıdır:
+PostgreSQL, OpenSearch, Qdrant ve Kafka konteynerlerini çalıştırmak için Docker Engine ve `compose` eklentisi kurulmalıdır:
 
 #### Yöntem A: Resmi Docker Depolarından Kurulum (Önerilen)
 ```bash
@@ -184,7 +184,7 @@ cp .env.example .env
 
 ---
 
-### Adım 2.8: Docker Altyapısını Başlatın (OpenSearch, Oracle, Qdrant, Kafka)
+### Adım 2.8: Docker Altyapısını Başlatın (OpenSearch, PostgreSQL, Qdrant, Kafka)
 
 Sistemin ihtiyaç duyduğu 4 temel konteyner tek bir komutla (`docker compose up -d`) ayağa kalkar:
 
@@ -194,17 +194,9 @@ docker compose up -d
 
 Bu komut şu 4 servisi arka planda başlatır:
 1. **OpenSearch 3.8.0** (`port: 9200`): BM25 metin indeksi, Türkçe analizör ve Geo-Point koordinatları.
-2. **Oracle 23ai Free** (`port: 1521`): İndeksleme durum takibi (`indexing_state`), loglar ve denetim kayıtları.
+2. **PostgreSQL 17** (`port: 5432`): İndeksleme durum takibi (`indexing_state`), loglar ve denetim kayıtları.
 3. **Qdrant Multi-Vector DB** (`port: 6333`): ColBERT token seviyesinde 128 boyutlu çoklu vektörler ve MaxSim motoru.
 4. **Apache Kafka 3.7.0 (KRaft)** (`port: 9092`): Zookeeper gerektirmeyen, hafif ve yüksek performanslı olay akış kuyruğu.
-
-> [!IMPORTANT]
-> **Oracle İlk Başlatma Notu:**  
-> Oracle 23ai konteyneri ilk kez ayağa kalkarken veritabanı şemasını oluşturması **30-60 saniye** sürer. Servislerin hazır olduğunu doğrulamak için:
-> ```bash
-> docker compose ps
-> ```
-> `oracle` ve `opensearch` servisleri `healthy` durumuna geldiğinde devam edebilirsiniz.
 
 #### Konteyner Bağlantı Testleri:
 ```bash
@@ -214,8 +206,8 @@ curl -s http://localhost:9200 | grep number
 # 2. Qdrant Multi-Vector DB Testi:
 curl -s http://localhost:6333/healthz
 
-# 3. Oracle DB Port Testi:
-nc -zvw3 localhost 1521
+# 3. PostgreSQL DB Port Testi:
+nc -zvw3 localhost 5432
 
 # 4. Kafka Broker Port Testi:
 nc -zvw3 localhost 9092
@@ -268,7 +260,7 @@ sudo ufw allow 8080/tcp  # Spring Boot REST API
 sudo ufw allow 5173/tcp  # React Vite Frontend Arayüzü
 sudo ufw allow 9200/tcp  # OpenSearch (İsteğe bağlı)
 sudo ufw allow 6333/tcp  # Qdrant (İsteğe bağlı)
-sudo ufw allow 1521/tcp  # Oracle DB (İsteğe bağlı)
+sudo ufw allow 5432/tcp  # PostgreSQL DB (İsteğe bağlı)
 sudo ufw allow 9092/tcp  # Kafka (İsteğe bağlı)
 sudo ufw status
 ```
@@ -283,8 +275,8 @@ Tüm yapılandırmalar **`.env`** dosyası ve **`src/main/resources/application.
 
 | Değişken Adı | Varsayılan Değer | Neye Göre Değiştirilmeli? | Açıklama |
 | :--- | :--- | :--- | :--- |
-| `DB_HOST` / `DB_PORT` | `localhost` / `1521` | Oracle farklı bir sunucuda veya bulutta ise (OCI / AWS RDS) | Oracle veritabanı bağlantı adresi |
-| `DB_SERVICE_NAME` | `FREEPDB1` | Oracle konteyneri dışındaki özel PDB adı | Oracle Pluggable Database adı |
+| `DB_HOST` / `DB_PORT` | `localhost` / `5432` | PostgreSQL farklı bir sunucuda veya bulutta ise (AWS RDS / Cloud SQL) | PostgreSQL veritabanı bağlantı adresi |
+| `DB_NAME` | `semantic_search` | Veritabanı adı | PostgreSQL veritabanı adı |
 | `DB_USERNAME` | `semantic_search` | Veritabanı kullanıcı adı | Uygulama şema kullanıcısı |
 | `DB_PASSWORD` | `SearchDev2026` | Üretim ortamında güçlü parola | Kullanıcı şifresi |
 | `OPENSEARCH_HOST` | `localhost` | AWS OpenSearch / harici cluster adresi | OpenSearch IP veya Domain adresi |
@@ -374,13 +366,13 @@ Projede, doğrudan veritabanına statik toplu yükleme yapmak yerine, gerçek d�
              │
              ├───────────────────────────────┬───────────────────────────────┐
              ▼ (1. Durum Takibi & Audit)     ▼ (2. BM25 & Geo-Point)         ▼ (3. Late Interaction)
-     [ Oracle 23ai DB ]              [ OpenSearch 3.8.0 ]            [ Qdrant Multi-Vector ]
+     [ PostgreSQL 17 DB ]             [ OpenSearch 3.8.0 ]            [ Qdrant Multi-Vector ]
      indexing_state tablosu          olaylar indeksi                 colbert_olaylar
      (Idempotency & Versiyon)        (turkish_search & GeoPoint)     (128-dim Token MaxSim)
 ```
 
 Kafka'dan tüketilen her bir olay mesajı eş zamanlı olarak:
-1. **Oracle 23ai (`indexing_state`)**: Idempotency ve versiyon kontrolüyle kaydedilir; işlem durumu `INDEXED` yapılır.
+1. **PostgreSQL (`indexing_state`)**: Idempotency ve versiyon kontrolüyle kaydedilir; işlem durumu `INDEXED` yapılır.
 2. **OpenSearch (`olaylar`)**: Başlık, özet (`shortText`), tam rapor (`longText`), adres, birim, tarih ve GPS koordinatları (`geo_point`) ile Türkçe analizörden geçirilip BM25 indeksine yazılır.
 3. **Qdrant (`colbert_olaylar`)**: `JavaColbertEngine` ile token seviyesinde 128 boyutlu çoklu vektörleri çıkarılarak donanım hızlandırmalı MaxSim araması için saklanır.
 
@@ -395,7 +387,7 @@ Simülasyonu dilediğiniz yöntemle başlatabilirsiniz:
 2. Sol paneldeki **"🛰️ Canlı Kafka Akış Simülasyonu"** bileşenine gelin.
 3. **Adet** (örn: *1.000 Olay*) ve **Akış Hızı** (örn: *20 olay/sn*) seçin.
 4. **"▶ Canlı Akışı Başlat"** butonuna tıklayın:
-   - Kafka'ya gönderilen ve Oracle/OpenSearch/Qdrant'a işlenen olay sayaçlarının canlı aktığını görebilirsiniz.
+   - Kafka'ya gönderilen ve PostgreSQL/OpenSearch/Qdrant'a işlenen olay sayaçlarının canlı aktığını görebilirsiniz.
    - Akış devam ederken yukarıdaki arama kutusundan sorgu yaptığınızda yeni gelen olayların anında sonuçlara dahil olduğunu test edebilirsiniz.
 
 #### Seçenek B: Terminalden Bağımsız Java Scripti Olarak (CLI)
@@ -548,11 +540,11 @@ Uygulama genelindeki varsayılan limitleri ve güvenlik tavanını `.env` veya `
 | `POST` | `/api/v1/search/explain` | `HybridExplainRequest` | UI için BM25, ColBERT, RRF ve Reranker detaylı karşılaştırması döner. |
 | `POST` | `/api/v1/simulation/kafka/start` | `limit=1000&delayMs=50` | Canlı Kafka olay akışı simülasyonunu başlatır. |
 | `POST` | `/api/v1/simulation/kafka/stop` | - | Çalışan simülasyonu durdurur. |
-| `GET` | `/api/v1/simulation/kafka/status` | - | Kafka yayınlanan ve Oracle işlenen canlı sayaçları döner. |
+| `GET` | `/api/v1/simulation/kafka/status` | - | Kafka yayınlanan ve PostgreSQL işlenen canlı sayaçları döner. |
 | `GET` | `/api/v1/olaylar/meta` | - | Dosyadaki toplam olay, birim ve tür istatistiklerini döner. |
 | `POST` / `GET` | `/api/v1/colbert/sync` | `indexName=olaylar` | OpenSearch'teki dökümanları Qdrant'a yükler/eşitler. |
 | `GET` | `/api/v1/colbert/status` | - | Qdrant ve ColBERT servislerinin durumunu kontrol eder. |
-| `POST` | `/api/v1/index` | `IndexDocumentRequest` | Tekil döküman ekler/günceller (OpenSearch + Qdrant + Oracle). |
+| `POST` | `/api/v1/index` | `IndexDocumentRequest` | Tekil döküman ekler/günceller (OpenSearch + Qdrant + PostgreSQL). |
 | `POST` | `/api/v1/index/bulk` | `List<IndexDocumentRequest>` | Toplu döküman indeksler. |
 | `GET` | `/actuator/health` | - | Spring Boot sistem ve bileşen sağlık durumu. |
 
@@ -560,13 +552,9 @@ Uygulama genelindeki varsayılan limitleri ve güvenlik tavanını `.env` veya `
 
 ## 🔧 7. Sık Karşılaşılan Sorunlar ve Çözümleri (Troubleshooting)
 
-### S1: `docker compose up` sonrası Spring Boot "Connection refused: localhost:1521" hatası veriyor
-* **Neden:** Oracle Free 23ai konteyneri ilk kurulumda dahili veri dosyalarını oluştururken 30-45 saniye sürer.
-* **Çözüm:** `docker compose ps` komutunu çalıştırıp `oracle` servisinin durumu `(healthy)` olana kadar bekleyin, ardından Spring Boot'u başlatın.
-
-### S2: `ORA-17023: Desteklenmeyen özellik: getMetaData` hatası
-* **Neden:** Oracle JDBC sürücüsünün `GenerationType.IDENTITY` kullanımında getMetaData çağırması.
-* **Çözüm:** Projede Flyway V5 ile Oracle standardı olan `search_query_log_seq` sequence'ına geçilmiştir. `./mvnw spring-boot:run` başlattığınızda V5 migration otomatik uygulanarak bu sorun çözülür.
+### S1: `docker compose up` sonrası Spring Boot veritabanı bağlantı hatası veriyor
+* **Neden:** PostgreSQL konteyneri başlatılırken kısa bir süre hazır olma aşamasından geçebilir.
+* **Çözüm:** `docker compose ps` komutunu çalıştırıp `postgres` servisinin durumu `(healthy)` olana kadar bekleyin, ardından Spring Boot'u başlatın.
 
 ### S3: ColBERT aramasında alakasız dökümanlar çıkıyor
 * **Neden:** Qdrant belleğinde eski veya güncellenmemiş vektörler kalmış olabilir.

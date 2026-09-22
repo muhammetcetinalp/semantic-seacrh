@@ -6,7 +6,6 @@
   "data": {
     "title": "Radar Alpha",
     "searchText": "Long range radar surveillance unit",
-    "tags": ["radar", "surveillance"],
     "structuredFields": {
       "region": "ANKARA",
       "status": "ACTIVE",

@@ -1,5 +1,6 @@
 package com.example.semantic_search.kafka;
 
+import com.example.semantic_search.config.KafkaIndexingProperties;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 

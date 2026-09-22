@@ -4,14 +4,17 @@ spring:
   application:
     name: semantic-search
   datasource:
-    url: ${DB_URL:jdbc:oracle:thin:@//${DB_HOST:localhost}:${DB_PORT:1521}/${DB_SERVICE_NAME:FREEPDB1}}
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:semantic_search}}
     username: ${DB_USERNAME:semantic_search}
-    password: ${DB_PASSWORD}
-    driver-class-name: oracle.jdbc.OracleDriver
+    password: ${DB_PASSWORD:SearchDev2026}
+    driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      hibernate:
+        default_schema: public
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -83,8 +86,8 @@ search:
     mock-enabled: ${EMBEDDING_MOCK_ENABLED:true}
   reranking:
     enabled: ${SEARCH_RERANKING_ENABLED:true}
-    provider: ${SEARCH_RERANKING_PROVIDER:java}   # java (pure in-memory) | ollama
-    endpoint: ${SEARCH_RERANKING_ENDPOINT:http://localhost:11434}
+    provider: ${SEARCH_RERANKING_PROVIDER:tei}   # tei (Hugging Face TEI Cross-Encoder) | ollama
+    endpoint: ${SEARCH_RERANKING_ENDPOINT:http://localhost:8082}
     model: ${SEARCH_RERANKING_MODEL:BAAI/bge-reranker-v2-m3}
   colbert:
     enabled: ${SEARCH_COLBERT_ENABLED:true}

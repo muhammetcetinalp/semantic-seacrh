@@ -1,4 +1,3 @@
-ALTER TABLE indexing_state ADD (
-    last_event_id VARCHAR2(128 CHAR),
-    last_event_version NUMBER(19, 0)
-);
+ALTER TABLE indexing_state
+    ADD COLUMN last_event_id VARCHAR(128),
+    ADD COLUMN last_event_version BIGINT;

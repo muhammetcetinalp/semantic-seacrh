@@ -1,54 +1,29 @@
 package com.example.semantic_search.exception;
 
-import java.time.Instant;
+/**
+ * Hata yanıtı transfer nesnesi.
+ *
+ * @deprecated Bu sınıf {@link com.example.semantic_search.dto.ErrorResponse} paketine taşınmıştır.
+ *             Geriye dönük uyumluluk amacıyla korunmaktadır.
+ */
+@Deprecated
+public class ErrorResponse extends com.example.semantic_search.dto.ErrorResponse {
 
-public class ErrorResponse {
-
-    private int status;
-    private String error;
-    private String message;
-    private Instant timestamp;
-
+    /**
+     * Varsayılan yapıcı metot.
+     */
     public ErrorResponse() {
-        this.timestamp = Instant.now();
+        super();
     }
 
+    /**
+     * Durum kodu, hata başlığı ve mesajı ile hata yanıtı oluşturur.
+     *
+     * @param status HTTP durum kodu
+     * @param error Hata tipi/başlığı
+     * @param message Detaylı hata mesajı
+     */
     public ErrorResponse(int status, String error, String message) {
-        this.status = status;
-        this.error = error;
-        this.message = message;
-        this.timestamp = Instant.now();
-    }
-
-    public int getStatus() {
-        return status;
-    }
-
-    public void setStatus(int status) {
-        this.status = status;
-    }
-
-    public String getError() {
-        return error;
-    }
-
-    public void setError(String error) {
-        this.error = error;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    public Instant getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(Instant timestamp) {
-        this.timestamp = timestamp;
+        super(status, error, message);
     }
 }

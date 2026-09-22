@@ -1,8 +1,8 @@
 package com.example.semantic_search;
 
-import com.example.semantic_search.opensearch.OpenSearchAdapter;
+import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
 import com.example.semantic_search.kafka.KafkaIndexingListener;
-import com.example.semantic_search.kafka.SearchEventProcessor;
+import com.example.semantic_search.service.SearchEventProcessor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import static org.assertj.core.api.Assertions.assertThat;

@@ -105,7 +105,7 @@ Her event tipi için şu kararları verin:
 
 ## 5. Sıralama ve tekrar işleme kuralını belirleyin
 
-Mevcut kod, aynı belge için sürekli artan sayısal `version` bekler. Oracle'da son
+Mevcut kod, aynı belge için sürekli artan sayısal `version` bekler. PostgreSQL'de son
 işlenen sürüm saklanır; aynı veya daha düşük sürümlü eventler atlanır.
 
 Gerçek eventte `version` yoksa Kafka açılmadan önce alternatif belirleyin:
@@ -123,7 +123,6 @@ nedeniyle ayrıca değerlendirilmelidir.
 
 - `title`
 - `searchText`
-- `tags`
 - `structuredFields`
 - `metadata`
 
@@ -134,9 +133,8 @@ Event yalnızca bir kayıt kimliği içeriyorsa, `SearchEventMapper` yerine veya
 arkasında kaynak API/veritabanından güncel veriyi alan bir bileşen ekleyin. Bu çağrının
 timeout ve retry davranışını ayrıca tanımlayın.
 
-Başarılı UPSERT sonrasında OpenSearch'e gönderilen kanonik `_source` JSON'u Oracle
-`indexing_state.document_source` CLOB alanında da saklanır. Bu alanda Oracle `IS JSON`
-constraint'i vardır. JSON; embedding dizisini, metadata'yı ve kök seviyeye açılmış
+Başarılı UPSERT sonrasında OpenSearch'e gönderilen kanonik `_source` JSON'u PostgreSQL
+`indexing_state.document_source` TEXT alanında da saklanır. JSON; embedding dizisini, metadata'yı ve kök seviyeye açılmış
 `structuredFields` alanlarını içerir. `indexName` JSON'a eklenmez; ayrı sütunda tutulur.
 DELETE sonrasında durum `DELETED` olur ve aktif `document_source` temizlenir.
 
@@ -151,7 +149,7 @@ export SEARCH_KAFKA_CONCURRENCY=1
 ```
 
 - Geçersiz mesajlar tekrar denenmeden hata topic'ine gider.
-- Oracle veya OpenSearch gibi geçici hatalar ayarlanan sayıda tekrar denenir.
+- PostgreSQL veya OpenSearch gibi geçici hatalar ayarlanan sayıda tekrar denenir.
 - Tüm denemeler başarısız olursa orijinal mesaj hata topic'ine gönderilir.
 - Hata topic'ine gönderim başarısız olursa kaynak offset commit edilmez.
 - Hata topic'indeki mesajların izlenmesi ve yeniden işlenmesi için operasyon sürecini
@@ -188,5 +186,5 @@ export SEARCH_KAFKA_ENABLED=true
 ```
 
 Başlangıç loglarında consumer'ın doğru topic partition'larını aldığını kontrol edin.
-Ardından kontrollü bir test eventi gönderip Oracle `indexing_state`, OpenSearch belgesi,
+Ardından kontrollü bir test eventi gönderip PostgreSQL `indexing_state`, OpenSearch belgesi,
 Kafka consumer lag ve uygulama metriklerini birlikte doğrulayın.

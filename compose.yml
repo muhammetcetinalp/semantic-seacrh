@@ -28,22 +28,23 @@ services:
       retries: 18
       start_period: 30s
 
-  oracle:
-    image: gvenzl/oracle-free:23.26.3-slim
+  postgres:
+    image: postgres:17-alpine
     environment:
-      ORACLE_RANDOM_PASSWORD: "true"
-      APP_USER: ${DB_USERNAME:-semantic_search}
-      APP_USER_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env or the environment}
+      POSTGRES_DB: ${DB_NAME:-semantic_search}
+      POSTGRES_USER: ${DB_USERNAME:-semantic_search}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-SearchDev2026}
     ports:
-      - "127.0.0.1:${DB_PORT:-1521}:1521"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
-      - oracle-data:/opt/oracle/oradata
+      - pg17-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "healthcheck.sh"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-semantic_search} -d ${DB_NAME:-semantic_search}"]
+      interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 60s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
   qdrant:
     image: qdrant/qdrant:latest
     ports:
@@ -74,9 +75,25 @@ services:
       - kafka-data:/var/lib/kafka/data
     restart: unless-stopped
 
+  reranker:
+    image: michaelf34/infinity:latest
+    command: v2 --model-id ${SEARCH_RERANKING_MODEL:-BAAI/bge-reranker-v2-m3} --port 7997 --batch-size 8 --no-model-warmup
+    ports:
+      - "127.0.0.1:${RERANKER_PORT:-8082}:7997"
+    environment:
+      - HF_HOME=/data
+      - INFINITY_MODEL_ID=${SEARCH_RERANKING_MODEL:-BAAI/bge-reranker-v2-m3}
+      - INFINITY_PORT=7997
+      - INFINITY_BATCH_SIZE=8
+      - INFINITY_MODEL_WARMUP=false
+    volumes:
+      - reranker-data:/data
+    restart: unless-stopped
+
 volumes:
   opensearch-data:
-  oracle-data:
+  pg17-data:
   qdrant-data:
   kafka-data:
+  reranker-data:
 

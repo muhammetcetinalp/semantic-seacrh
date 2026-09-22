@@ -1,5 +1,6 @@
 package com.example.semantic_search.kafka;
 
+import com.example.semantic_search.config.KafkaIndexingConfiguration;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;

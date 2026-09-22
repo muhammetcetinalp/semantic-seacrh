@@ -21,7 +21,7 @@ sequenceDiagram
     participant Qdrant as ⚡ Qdrant DB (Port 6333)
     participant Ollama as 🧠 Ollama / BGE-M3 (Port 11434)
     participant Reranker as 🎯 Cross-Encoder Reranker
-    participant Oracle as 🏛️ Oracle 23ai (Port 1521)
+    participant Postgres as 🐘 PostgreSQL 17 (Port 5432)
 
     User->>UI: 1. Arama Sorgusu Yazar & "Ara" Butonuna Basar
     Note over UI: Mod: COLBERT veya DENSE<br/>Filtreler: Birim, Tarih, Konum<br/>Parametreler: limit, çarpan, k, ağırlıklar
@@ -71,8 +71,8 @@ sequenceDiagram
 
     rect rgb(255, 245, 245)
     Note over Service: ── AŞAMA 4: Denetim & İstatistik Kaydı ──
-    Service->>Oracle: 16. logSuccess (INSERT INTO search_query_log)
-    Note over Oracle: Sorgu metni, çalışma süresi, limitler,<br/>ağırlıklar Oracle tablosuna yazılır
+    Service->>Postgres: 16. logSuccess (INSERT INTO search_query_log)
+    Note over Postgres: Sorgu metni, çalışma süresi, limitler,<br/>ağırlıklar PostgreSQL tablosuna yazılır
     end
 
     Service-->>Controller: 17. HybridExplainResponse DTO
@@ -299,26 +299,26 @@ $$RRF(d) = \frac{w_{BM25}}{k + rank_{BM25}(d)} + \frac{w_{SEM}}{k + rank_{SEM}(d
 
 ---
 
-### ADIM 7: İkinci Aşama — Native Java Cross-Encoder Reranker
+### ADIM 7: İkinci Aşama — Hugging Face TEI Cross-Encoder Reranker
 
-RRF sonucunda belirlenen en iyi 10 döküman, derin anlamsal doğrulama için ikinci aşama yeniden sıralayıcıya (`NativeJavaRerankingService.java`) girer.
+Birinci aşama sonucunda belirlenen en iyi adaylar, derin anlamsal doğrulama için ikinci aşama nöral yeniden sıralayıcıya (`TeiRerankingService.java` -> Hugging Face TEI / `BAAI/bge-reranker-v2-m3`) girer.
 
-1. **Çapraz Dikkat (Cross-Attention Analizi):**
-   * Tekil vektörlerin aksine, `(Sorgu, Döküman Metni)` çifti aynı anda analiz edilir.
-   * Kelimelerin döküman içerisindeki sırası, olumsuzluk ekleri (`"bulunamadı"`, `"sağ kurtarıldı"`), unvan ve birim eşleşmeleri birlikte değerlendirilir.
-2. **Puanlama:** Her döküman için 0.0000 ile 1.0000 arasında yeni bir `relevanceScore` hesaplanır:
-   $$\text{Score} = (0.40 \times \text{Title}) + (0.35 \times \text{Text}) + (0.10 \times \text{Tags}) + (0.15 \times \text{BaseRRF})$$
+1. **Tam Çapraz Dikkat (Full Cross-Attention Mekanizması):**
+   * Tekil (bi-encoder) vektörlerin aksine, `(Sorgu, Döküman Metni)` çifti modele birlikte verilir ve her bir sorgu token'ı dökümanın her bir kelimesiyle doğrudan çapraz dikkat kurar.
+   * Kelimelerin bağlamsal sırası, olumsuzluk ekleri (`"bulunamadı"`, `"sağ kurtarıldı"`), unvan ve birim eşleşmeleri nöral ağırlıklarla değerlendirilir.
+2. **Nöral Puanlama:** Model her çift için sigmoid/softmax ile 0.0000 ile 1.0000 arasında saf bir `relevanceScore` üretir.
+   * Anlamsız/gibberish sorgularda (`"kmndjkgfhdkjhdıfug"` gibi) model `~0.00` üretirken, semantik olarak örtüşen dökümanlar `0.90+` alarak en üste taşınır.
 3. **Sıralama Değişimi (Rank Delta):**
-   * Örneğin BM25'te 5. olan bir arama kurtarma olayı, Cross-Encoder analizinde sorguyla birebir örtüştüğü için 1. sıraya yükselebilir ($\Delta = +4$).
+   * İlk aşamada geri sıralarda kalan bir olay, Cross-Encoder analizinde sorguyla birebir anlamsal uyum sağlarsa ilk sıraya yükselebilir ($\Delta = +4$).
 
 ---
 
-### ADIM 8: Kalıcılık & Denetim — Oracle 23ai Veritabanı Loglaması
+### ADIM 8: Kalıcılık & Denetim — PostgreSQL Veritabanı Loglaması
 
 Arama tamamlandığında `SearchQueryLogService.java` devreye girer:
-* **Veritabanı:** Oracle 23ai Free (`port: 1521`, servis: `FREEPDB1`)
+* **Veritabanı:** PostgreSQL 17 (`port: 5432`, db: `semantic_search`)
 * **Tablo:** `search_query_log`
-* **Sequence:** `search_query_log_seq.NEXTVAL`
+* **Sequence:** `search_query_log_seq`
 * **Kaydedilen Veriler:**
   * Kullanıcı sorgusu (`"İstanbul boğazı şüpheli gemi"`)
   * Arama tipi (`HYBRID`), Semantik Mod (`COLBERT`)
