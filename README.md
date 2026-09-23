@@ -28,6 +28,7 @@ Bu proje; **Java 21**, **Spring Boot 4.x**, **OpenSearch 3.8.0**, **PostgreSQL 1
 > 5. 🔎 **[OPENSEARCH_KURULUMU_README.md](OPENSEARCH_KURULUMU_README.md)**: OpenSearch 3.8.0 Airgap (kapalı ağ) ve Windows kurulumu, yerel/uzak sunucu yapılandırması, k-NN vektör ayarları, `.env` entegrasyonu ve sorun giderme kılavuzu.
 > 6. 🛰️ **[KAFKA_KUBERNETES_BAGLANTI_README.md](KAFKA_KUBERNETES_BAGLANTI_README.md)**: Kubernetes üzerinde koşan Kafka kümesine Airgap ortamdan bağlanma, NodePort/LoadBalancer ayarları, topic dinleme, olay sözleşmesi (JSON schema) ve Idempotency kılavuzu.
 > 7. 🧠 **[EMBEDDING_VE_RERANKER_KURULUMU_README.md](EMBEDDING_VE_RERANKER_KURULUMU_README.md)**: Airgap ortamdaki uzak model sunucusuna (BGE-M3 & Cross-Encoder) bağlanma, `.cer` SSL sertifikası, API Key kimlik doğrulama ve RestClient yapılandırma kılavuzu.
+> 8. 🧭 **[YENI_VERI_MODELI_ENTEGRASYON_REHBERI.md](YENI_VERI_MODELI_ENTEGRASYON_REHBERI.md)**: Airgap ortamda demo "Olaylar" yerine tamamen farklı bir operasyonel veri türü geldiğinde PostgreSQL DDL, Kafka Consumer, OpenSearch 3.8.0 Mapping/Search/Filter ve BGE-M3 Embedding katmanlarının uçtan uca uyarlanması kılavuzu.
 
 ---
 
