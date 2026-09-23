@@ -1,6 +1,6 @@
 # 🗄️ Veri Depolama, Haritalama ve İndeksleme Mimarisi
 
-Bu doküman, sistemdeki **ham verinin (olaylar.json, Kafka Olayları, REST API)** sistem tarafından nasıl okunduğunu, hangi katmanda ne formatta dönüştürüldüğünü ve **PostgreSQL**, **OpenSearch** ile **Qdrant** veritabanlarına nasıl kaydedildiğini adım adım ve teknik detaylarıyla açıklamaktadır.
+Bu doküman, sistemdeki **ham verinin (olaylar.json, Kafka Olayları, REST API)** sistem tarafından nasıl okunduğunu, hangi katmanda ne formatta dönüştürüldüğünü ve **PostgreSQL** ile **OpenSearch** veritabanlarına nasıl kaydedildiğini adım adım ve teknik detaylarıyla açıklamaktadır.
 
 ---
 
@@ -11,7 +11,7 @@ Sistemde dökümanlar 3 farklı kanaldan gelebilir:
 2. **Toplu JSON İçe Aktarımı (Batch Ingestion)**: `olaylar.json` üzerinden doğrudan toplu yükleme
 3. **Tekil REST API (Direct CRUD)**: `POST /api/v1/indexing`
 
-Aşağıdaki şema, gelen bir olayın 3 ayrı veritabanına eşzamanlı dağılımını gösterir:
+Aşağıdaki şema, gelen bir olayın veritabanlarına eşzamanlı dağılımını gösterir:
 
 ```mermaid
 flowchart TD
@@ -20,7 +20,6 @@ flowchart TD
     subgraph Bellek [Java 21 In-Memory Model]
         Mapper --> Doc[SearchDocument Nesnesi]
         Doc --> EmbeddingGen[EmbeddingProvider<br/>1024-dim Dense Vektör]
-        Doc --> ColbertGen[ColbertService<br/>Token-Level 128-dim Çoklu Vektör]
     end
 
     subgraph DB1 [1. PostgreSQL - Durum & Denetim]
@@ -30,10 +29,6 @@ flowchart TD
 
     subgraph DB2 [2. OpenSearch - Hibrit Metin & k-NN]
         Doc -->|BM25 + GeoPoint + HNSW| OSIndex[(olaylar İndeksi<br/>Turkish Analyzer + 1024-dim Vector)]
-    end
-
-    subgraph DB3 [3. Qdrant - ColBERT Late-Interaction]
-        Doc -->|Token Multi-Vectors| QdrantCol[(colbert_olaylar Koleksiyonu<br/>Tokens x 128-dim + JSON Payload)]
     end
 ```
 
@@ -98,15 +93,20 @@ Kullanıcıların `/api/v1/search` ve `/api/v1/search/explain` üzerinden attı�
 
 | Kolon Adı | Veri Tipi | Açıklama |
 | :--- | :--- | :--- |
-| `query` | `VARCHAR2(2000)` | Kullanıcının girdiği ham arama cümlesi |
-| `index_name` | `VARCHAR2(255)` | Aranan indeks (`olaylar`) |
-| `search_type` | `VARCHAR2(50)` | `BM25`, `SEMANTIC`, `HYBRID` veya `HYBRID_EXPLAIN` |
-| `took_ms` | `NUMBER` | Sorgunun toplam yanıt süresi (ms) |
-| `bm25_took_ms` / `semantic_took_ms` | `NUMBER` | Her motorun harcadığı ayrık süre (ms) |
-| `bm25_weight` / `semantic_weight` | `NUMBER(5,4)` | RRF füzyonunda kullanılan katsayılar (örn: 0.5000) |
-| `final_results_json` | `CLOB` | Dönen sonuçların skorları, rütbeleri ve metadata'sı (JSON formatında) |
-| `settings_json` | `CLOB` | Sorgu parametreleri (`limit`, `offset`, `filters`) |
-| `status` | `VARCHAR2(20)` | `SUCCESS` veya `ERROR` |
+| `query` | `VARCHAR(2000)` | Kullanıcının girdiği ham arama cümlesi |
+| `index_name` | `VARCHAR(255)` | Aranan indeks (`olaylar`) |
+| `search_type` | `VARCHAR(50)` | `BM25`, `SEMANTIC`, `HYBRID` veya `HYBRID_EXPLAIN` |
+| `took_ms` | `BIGINT` | Sorgunun toplam yanıt süresi (ms) |
+| `bm25_took_ms` / `semantic_took_ms` | `BIGINT` | Her motorun harcadığı ayrık süre (ms) |
+| `bm25_weight` / `semantic_weight` | `NUMERIC(5,4)` | RRF füzyonunda kullanılan katsayılar (örn: 0.5000) |
+| `final_results_json` | `TEXT` | Dönen sonuçların skorları, rütbeleri ve metadata'sı (JSON formatında) |
+| `settings_json` | `TEXT` | Sorgu parametreleri (`limit`, `offset`, `filters`) |
+| `status` | `VARCHAR(20)` | `SUCCESS` veya `ERROR` |
+| `created_at` | `TIMESTAMPTZ` | Sorgu zaman damgası |
+
+> 💡 **Veritabanı Hazırlık Scriptleri**:
+> - Yeni bir PostgreSQL 17 sunucusunda veritabanı ve kullanıcı açmak için: [`sql/init-postgres-17.sql`](file:///Users/macbookairm1/Desktop/semantic-search/sql/init-postgres-17.sql)
+> - Tüm tablo ve sequence DDL şemasını tek dosyada çalıştırmak için: [`sql/schema-complete.sql`](file:///Users/macbookairm1/Desktop/semantic-search/sql/schema-complete.sql)
 
 ---
 
@@ -161,63 +161,15 @@ OpenSearch, **Metin Arama (BM25)**, **Coğrafi Konum Filtreleme (GeoPoint)** ve 
 
 ---
 
-## ⚡ 5. Qdrant Veri Modeli ve Saklama Formatı (ColBERT Multi-Vector)
+## 🔄 5. Karşılaştırma Özeti: Hangi Veri Nerede Tutuluyor?
 
-Qdrant, ColBERT modelinin **Token Düzeyinde Çoklu Vektörlerini (Multi-Vector Late-Interaction)** saklamak üzere özelleştirilmiştir.
+| Alan / Özellik | PostgreSQL (`indexing_state`) | OpenSearch (`olaylar`) |
+| :--- | :--- | :--- |
+| **Rolü** | Durum, Audit, Versiyon Kilidi | Ana Arama, BM25, GeoPoint, Dense HNSW |
+| **Kimlik (ID)** | `document_id` (String) | `id` (Keyword) |
+| **Metin Verisi** | `document_source` (TEXT JSON) | `searchText`, `title`, `longText` (Turkish Text) |
+| **Vektör Verisi** | Tutulmaz (Yalnızca SHA-256 Hash) | **1024-dim Dense Vektör** (BGE-M3 / TEI embedding) |
+| **Coğrafi Bilgi** | JSON içinde metin | **`geo_point`** (`lat`, `lon` sayısal indeksli) |
+| **Silme Yönetimi** | `status = 'DELETED'` (Soft-delete) | Hard-delete (`DELETE /olaylar/_doc/{id}`) |
 
-### A. Koleksiyon Tanımı (`colbert_olaylar`)
-- **Vektör Yapısı**: İsimlendirilmiş çoklu vektör (`name: "colbert"`).
-- **Vektör Boyutu**: 128 boyutlu (ColBERTv2 token projection boyutu).
-- **Mesafe Metriği**: `Cosine`.
-- **Multivector Config**: `comparator: max_sim` (Late-interaction MaxSim işlemini doğrudan Qdrant motoru içinde C++ hızında icra eder).
-
-### B. Qdrant Point (Nokta) Formatı
-Her bir olay dökümanı için Qdrant'ta bir Point oluşturulur:
-- **Point ID**: Deterministik UUID (Olayın `entityId` değerinden `UUID.nameUUIDFromBytes` ile üretilir). Bu sayede güncellemelerde üzerine yazar, mükerrer kayıt oluşmaz.
-- **Vectors**: Dökümandaki her bir token için üretilmiş 128-boyutlu vektörler matrisi: `List<List<Float>>` (Matris boyutu: `[Token_Sayısı x 128]`).
-- **Payload**: Olayın hızlı önizlemesi ve filtrelemesi için saklanan JSON metadata.
-
-### C. Qdrant'a Gönderilen Örnek Payload
-```json
-{
-  "points": [
-    {
-      "id": "c71a3962-4ef9-3221-a3f8-80988647ba5c",
-      "vector": {
-        "colbert": [
-          [0.041, -0.122, 0.088, "...128 float (Token 1 - [CLS])..."],
-          [0.104, 0.012, -0.056, "...128 float (Token 2 - hücumbot)..."],
-          [-0.032, 0.078, 0.141, "...128 float (Token 3 - filotilla)..."],
-          ["...(metin uzunluğuna göre N adet token vektörü)..."]
-        ]
-      },
-      "payload": {
-        "entity_id": "42d81a36-dd16-4aaf-b3d2-0f4df50d9b94",
-        "title": "Hücumbot Filotilla Komutanlığı Sorumluluk Sahasında Şüpheli Gemi Takibi...",
-        "searchText": "Hücumbot Filotilla Komutanlığı...",
-        "shortText": "Hücumbot Filotilla Komutanlığı, 1 Ağustos 2025 tarihinde...",
-        "birim": "Hücumbot Filotilla Komutanlığı",
-        "type": "Deniz Trafiği Takibi",
-        "adres": "İstanbul Boğazı Kuzey Girişi, İstanbul açıkları...",
-        "tarih": "2025-08-01T00:08:00Z",
-        "konum": "41.4146, 29.1387"
-      }
-    }
-  ]
-}
-```
-
----
-
-## 🔄 6. Karşılaştırma Özeti: Hangi Veri Nerede Tutuluyor?
-
-| Alan / Özellik | PostgreSQL (`indexing_state`) | OpenSearch (`olaylar`) | Qdrant (`colbert_olaylar`) |
-| :--- | :--- | :--- | :--- |
-| **Rolü** | Durum, Audit, Versiyon Kilidi | Ana Arama, BM25, GeoPoint, Dense HNSW | Token-level MaxSim Rerank |
-| **Kimlik (ID)** | `document_id` (String) | `id` (Keyword) | Deterministik UUID (Olay ID'sinden) |
-| **Metin Verisi** | `document_source` (TEXT JSON) | `searchText`, `title`, `longText` (Turkish Text) | Payload içinde `title`, `searchText` vb. |
-| **Vektör Verisi** | Tutulmaz (Yalnızca SHA-256 Hash) | **1024-dim Dense Vektör** (Dökümanın tümü için tek vektör) | **N x 128-dim Multi-Vektör** (Her token için ayrı vektör) |
-| **Coğrafi Bilgi** | JSON içinde metin | **`geo_point`** (`lat`, `lon` sayısal indeksli) | Payload içinde string |
-| **Silme Yönetimi** | `status = 'DELETED'` (Soft-delete) | Hard-delete (`DELETE /olaylar/_doc/{id}`) | Hard-delete (`POST /points/delete`) |
-
-Bu üçlü mimari sayesinde sistem, hem kurumsal ilişkisel veritabanı güvenliğini (PostgreSQL ACID) hem geniş ölçekli metin aramasını (OpenSearch) hem de son teknoloji çoklu vektör anlamsal eşleştirmesini (ColBERT + Qdrant) sıfır veri kaybı ile yürütmektedir.
+Bu mimari sayesinde sistem, hem kurumsal ilişkisel veritabanı güvenliğini (PostgreSQL ACID) hem de geniş ölçekli metin ve 1024-boyutlu HNSW vektör aramasını (OpenSearch) sıfır veri kaybı ile yürütmektedir.

@@ -8,9 +8,8 @@ import org.springframework.scheduling.annotation.EnableAsync;
  * Semantik Arama ve İndeksleme Spring Boot Ana Uygulama Sınıfı.
  *
  * <p>Bu uygulama hibrit arama (BM25 + BGE-M3 / TEI k-NN kosinüs vektörleri),
- * saf Java ColBERT (Contextualized Late Interaction - MaxSim), Qdrant çoklu-vektör
- * veritabanı entegrasyonu, Cross-Encoder yeniden sıralama (reranking) ve
- * Kafka tabanlı olay odaklı (event-driven) indeksleme yeteneklerini barındırır.</p>
+ * Cross-Encoder yeniden sıralama (reranking) ve Kafka tabanlı olay odaklı
+ * (event-driven) indeksleme yeteneklerini barındırır.</p>
  */
 @SpringBootApplication
 @EnableAsync

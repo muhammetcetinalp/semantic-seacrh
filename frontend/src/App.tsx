@@ -21,7 +21,6 @@ const DEFAULT_SETTINGS: UiSettings = {
   indexName: "",
   types: "",
   filters: "",
-  semanticMode: "DENSE",
 };
 
 /* ────────────────────────────────────────────────────
@@ -329,7 +328,6 @@ function ScoreBar({ value, max, variant }: { value: number; max: number; variant
    Algorithm Diagnostic / Overlap Banner
 ──────────────────────────────────────────────────── */
 function SearchDiagnosticBanner({ result }: { result: HybridExplainResponse }) {
-  const isColbert = result.semantic.method === "COLBERT";
   const bm25Ids = useMemo(() => new Set(result.bm25.results.map(r => r.document.id)), [result]);
   const semIds = useMemo(() => new Set(result.semantic.results.map(r => r.document.id)), [result]);
 
@@ -351,7 +349,7 @@ function SearchDiagnosticBanner({ result }: { result: HybridExplainResponse }) {
         <div className="diagnostic-info">
           <span className="diagnostic-label">Ortak Adaylar</span>
           <span className="diagnostic-count">{bothCount}</span>
-          <span className="diagnostic-sub">BM25 ve {isColbert ? "ColBERT" : "Semantik"}</span>
+          <span className="diagnostic-sub">BM25 ve Semantik</span>
         </div>
       </div>
 
@@ -365,13 +363,11 @@ function SearchDiagnosticBanner({ result }: { result: HybridExplainResponse }) {
       </div>
 
       <div className="diagnostic-card sem">
-        <div className={`diagnostic-indicator ${isColbert ? "colbert" : "sem"}`} />
+        <div className="diagnostic-indicator sem" />
         <div className="diagnostic-info">
-          <span className="diagnostic-label">{isColbert ? "Yalnızca ColBERT" : "Yalnızca Semantik"}</span>
+          <span className="diagnostic-label">Yalnızca Semantik</span>
           <span className="diagnostic-count">{semOnlyCount}</span>
-          <span className="diagnostic-sub">
-            {isColbert ? "Token MaxSim çoklu vektör" : "Vektörel anlamsal yakınlık"}
-          </span>
+          <span className="diagnostic-sub">Vektörel anlamsal yakınlık</span>
         </div>
       </div>
 
@@ -399,7 +395,7 @@ function AlgoInfo({
   resultCount,
   tookMs
 }: {
-  variant: "bm25" | "sem" | "colbert" | "rrf" | "normalized" | "rerank";
+  variant: "bm25" | "sem" | "rrf" | "normalized" | "rerank";
   query: string;
   model?: string;
   resultCount?: number;
@@ -449,33 +445,6 @@ function AlgoInfo({
         <div className="algo-info-row">
           <span className="algo-info-label">SONUÇ HAVUZU</span>
           <span className="algo-info-val"><strong>{resultCount ?? 0} aday döküman</strong> ({tookMs ?? 0} ms) — Terim frekansı ve alan ağırlığına göre puanlandı</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (variant === "colbert") {
-    return (
-      <div className="algo-info colbert">
-        <div className="algo-info-row">
-          <span className="algo-info-label">ALGORİTMA</span>
-          <span className="algo-info-val"><strong>ColBERT MaxSim · Qdrant Multi-Vector Store</strong></span>
-        </div>
-        <div className="algo-info-row">
-          <span className="algo-info-label">MODEL</span>
-          <span className="algo-info-val"><strong>{model || "jinaai/jina-colbert-v2"}</strong> (128-dim çoklu vektör / kelime başına)</span>
-        </div>
-        <div className="algo-info-row">
-          <span className="algo-info-label">DEPOLAMA</span>
-          <span className="algo-info-val"><strong>Qdrant Vektör Veritabanı</strong> (Kalıcı Vektörler — Canlı Re-embed Yok)</span>
-        </div>
-        <div className="algo-info-row">
-          <span className="algo-info-label">EŞLEŞME FONKSİYONU</span>
-          <span className="algo-info-val"><strong>MaxSim</strong> — S(Q, D) = Σ max(Q_q · D_d)</span>
-        </div>
-        <div className="algo-info-row">
-          <span className="algo-info-label">SONUÇ HAVUZU</span>
-          <span className="algo-info-val"><strong>{resultCount ?? 0} aday döküman</strong> ({tookMs ?? 0} ms) — Token seviyesinde ince anlamsal eşleşmeler</span>
         </div>
       </div>
     );
@@ -557,12 +526,10 @@ function AlgoInfo({
 ──────────────────────────────────────────────────── */
 function ResultDetail({
   doc,
-  query,
-  tokenMatches
+  query
 }: {
   doc: SearchDocument;
   query: string;
-  tokenMatches?: import("./types").TokenMatch[] | null;
 }) {
   const matchAnalysis = analyzeTermMatches(doc, query);
 
@@ -627,20 +594,6 @@ function ResultDetail({
         <div className="detail-section">
           <div className="detail-label">DÖKÜMAN İÇERİĞİ</div>
           <div className="detail-text">{highlightTerms(doc.searchText, query)}</div>
-        </div>
-      )}
-
-      {/* ColBERT MaxSim Token Interactions if present */}
-      {tokenMatches && tokenMatches.length > 0 && (
-        <div className="detail-section">
-          <div className="detail-label">COLBERT TOKEN-LEVEL MAXSIM ETKİLEŞİMİ</div>
-          <div className="maxsim-pills">
-            {tokenMatches.map((tm, idx) => (
-              <span key={idx} className="maxsim-pill">
-                "{tm.queryToken}" <span className="maxsim-arrow">→</span> "{tm.matchedDocToken}" <span className="maxsim-score">(%{Math.round(tm.similarity * 100)})</span>
-              </span>
-            ))}
-          </div>
         </div>
       )}
 
@@ -718,13 +671,13 @@ function getDocDisplayTitle(doc: SearchResult): string {
 }
 
 /* ────────────────────────────────────────────────────
-   BM25 / Semantic / ColBERT result card
+   BM25 / Semantic result card
 ──────────────────────────────────────────────────── */
 function RankedResultRow({
   item, variant, maxScore, query
 }: {
   item: RankedResult;
-  variant: "bm25" | "sem" | "colbert";
+  variant: "bm25" | "sem";
   maxScore: number;
   query: string;
 }) {
@@ -798,19 +751,6 @@ function RankedResultRow({
           </div>
         )}
 
-        {/* ColBERT: Show token-level MaxSim matches */}
-        {variant === "colbert" && item.tokenMatches && item.tokenMatches.length > 0 && (
-          <div className="maxsim-group">
-            <div className="maxsim-pills">
-              {item.tokenMatches.map((tm, idx) => (
-                <span key={idx} className="maxsim-pill" title={`Sorgu: "${tm.queryToken}" → Döküman: "${tm.matchedDocToken}" (Benzerlik: %${Math.round(tm.similarity * 100)})`}>
-                  {tm.queryToken} <span className="maxsim-arrow">→</span> {tm.matchedDocToken} <span className="maxsim-score">(%{Math.round(tm.similarity * 100)})</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Semantic: Show vector similarity badge */}
         {variant === "sem" && (
           <div className="match-pills">
@@ -829,16 +769,14 @@ function RankedResultRow({
           </div>
         )}
 
-        {expanded && <ResultDetail doc={doc} query={query} tokenMatches={item.tokenMatches} />}
+        {expanded && <ResultDetail doc={doc} query={query} />}
       </div>
 
       <div className="result-meta">
         <span className={`score-badge ${variant}`}>
           {variant === "bm25"
             ? fmt(item.originalScore, 2)
-            : variant === "colbert"
-              ? `MaxSim ${fmt(item.originalScore, 2)}`
-              : fmt(item.originalScore, 4)}
+            : fmt(item.originalScore, 4)}
         </span>
         {doc.type && <span className="type-badge">{doc.type}</span>}
       </div>
@@ -1054,9 +992,6 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const [syncLoading, setSyncLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
-
   // Incident dataset & filter states
   const [olaylarMeta, setOlaylarMeta] = useState<{ totalCount: number; types: string[]; birimler: string[] } | null>(null);
   const [selectedType, setSelectedType] = useState<string>("");
@@ -1131,7 +1066,7 @@ export default function App() {
     try {
       const res = await importOlaylar(importLimit, false);
       if (res.status === "ok") {
-        setImportStatus(`${res.indexedCount} olay OpenSearch ve Qdrant ColBERT'e aktarıldı (${res.tookMs}ms).`);
+        setImportStatus(`${res.indexedCount} olay OpenSearch'e aktarıldı (${res.tookMs}ms).`);
         getOlaylarMeta().then(data => {
           if (data && data.totalCount) setOlaylarMeta(data);
         }).catch(() => {});
@@ -1142,24 +1077,6 @@ export default function App() {
       setImportStatus(`Hata: ${err.message}`);
     } finally {
       setImportLoading(false);
-    }
-  };
-
-  const handleSyncQdrant = async () => {
-    setSyncLoading(true);
-    setSyncStatus(null);
-    try {
-      const res = await fetch("/api/v1/colbert/sync", { method: "POST" });
-      const data = await res.json();
-      if (data.status === "ok") {
-        setSyncStatus(`${data.syncedCount} döküman Qdrant'a yüklendi (${data.tookMs}ms).`);
-      } else {
-        setSyncStatus(`Uyarı: ${data.reason || data.message || "Eşitleme uyarısı"}`);
-      }
-    } catch (err: any) {
-      setSyncStatus(`Hata: ${err.message}`);
-    } finally {
-      setSyncLoading(false);
     }
   };
 
@@ -1194,7 +1111,6 @@ export default function App() {
       limit: settings.limit,
       candidateMultiplier: settings.candidateMultiplier,
       rankConstant: settings.rankConstant,
-      semanticMode: settings.semanticMode,
       fusionMode: "RRF",
       ...(settings.indexName.trim() ? { indexName: settings.indexName.trim() } : {}),
       ...(effectiveTypes ? { types: effectiveTypes } : {}),
@@ -1236,8 +1152,6 @@ export default function App() {
     }
     return map;
   }, [result]);
-
-  const isColbertActive = result ? result.semantic.method === "COLBERT" : settings.semanticMode === "COLBERT";
 
   return (
     <div className="shell">
@@ -1297,11 +1211,11 @@ export default function App() {
         {/* Loading Skeleton */}
         {loading && !result && (
           <div className="pipeline-steps">
-            {["BM25", settings.semanticMode === "COLBERT" ? "COLBERT" : "SEMANTIC", "RRF FUSION"].map((label, i) => (
-              <div key={label} className={`stage-card ${["bm25", settings.semanticMode === "COLBERT" ? "colbert" : "sem", "final pipeline-step-full"][i]}`}>
+            {["BM25", "SEMANTIC", "RRF FUSION"].map((label, i) => (
+              <div key={label} className={`stage-card ${["bm25", "sem", "final pipeline-step-full"][i]}`}>
                 <div className="stage-header">
-                  <span className={`stage-badge ${["bm25", settings.semanticMode === "COLBERT" ? "colbert" : "sem", "rrf"][i]}`}>{label}</span>
-                  <span className="stage-title">{["Kelime Eşleşmesi (BM25)", settings.semanticMode === "COLBERT" ? "ColBERT Late-Interaction" : "Anlamsal Arama (BGE-M3)", "Hibrit Birleştirme (RRF)"][i]}</span>
+                  <span className={`stage-badge ${["bm25", "sem", "rrf"][i]}`}>{label}</span>
+                  <span className="stage-title">{["Kelime Eşleşmesi (BM25)", "Anlamsal Arama (BGE-M3)", "Hibrit Birleştirme (RRF)"][i]}</span>
                 </div>
                 <SkeletonResults />
               </div>
@@ -1321,7 +1235,7 @@ export default function App() {
                 <div className="pipeline-meta">
                   Sorgu: <strong>"{result.query}"</strong>
                   {result.indexName && <> · İndeks: <strong>{result.indexName}</strong></>}
-                  <> · Mod: <strong style={{ color: isColbertActive ? "var(--colbert-color)" : "var(--sem-color)" }}>{isColbertActive ? "ColBERT (Late-Interaction)" : "Standart Dense (BGE-M3)"}</strong></>
+                  <> · Mod: <strong style={{ color: "var(--sem-color)" }}>Standart Dense (BGE-M3)</strong></>
                 </div>
                 <div className="stat-chips">
                   <div className="stat-chip">
@@ -1329,8 +1243,8 @@ export default function App() {
                     BM25: {result.bm25.results.length} aday ({result.bm25.tookMs}ms)
                   </div>
                   <div className="stat-chip">
-                    <span className={`dot ${isColbertActive ? "colbert" : "sem"}`} style={isColbertActive ? { background: "var(--colbert-color)" } : {}} />
-                    {isColbertActive ? "ColBERT" : "Semantic"}: {result.semantic.results.length} aday ({result.semantic.tookMs}ms)
+                    <span className="dot sem" />
+                    Semantic: {result.semantic.results.length} aday ({result.semantic.tookMs}ms)
                   </div>
                   <div className="stat-chip">
                     <span className="dot rrf" />
@@ -1386,23 +1300,23 @@ export default function App() {
                 </div>
               </div>
 
-              {/* ── Semantic / ColBERT Stage ── */}
-              <div className={`stage-card ${isColbertActive ? "colbert" : "sem"}`}>
+              {/* ── Semantic Stage ── */}
+              <div className="stage-card sem">
                 <div className="stage-header">
-                  <span className={`stage-badge ${isColbertActive ? "colbert" : "sem"}`}>
-                    {isColbertActive ? "COLBERT" : "SEMANTIC"}
+                  <span className="stage-badge sem">
+                    SEMANTIC
                   </span>
                   <span className="stage-title">
-                    {isColbertActive ? "Token Seviyesi Çoklu Vektör (Late Interaction)" : "Vektör Tabanlı Anlamsal Arama (Dense)"}
+                    Vektör Tabanlı Anlamsal Arama (Dense)
                   </span>
                   <span className="stage-time">{result.semantic.tookMs}ms</span>
                 </div>
                 <AlgoInfo
-                  variant={isColbertActive ? "colbert" : "sem"}
+                  variant="sem"
                   query={result.query}
                   resultCount={result.semantic.results.length}
                   tookMs={result.semantic.tookMs}
-                  model={isColbertActive ? "jinaai/jina-colbert-v2" : "BAAI/bge-m3"}
+                  model="BAAI/bge-m3"
                 />
                 <div className="stage-body">
                   {result.semantic.results.length === 0
@@ -1411,7 +1325,7 @@ export default function App() {
                         <RankedResultRow
                           key={r.document.id}
                           item={r}
-                          variant={isColbertActive ? "colbert" : "sem"}
+                          variant="sem"
                           maxScore={semMax}
                           query={result.query}
                         />
@@ -1439,7 +1353,7 @@ export default function App() {
                     RRF FUSION
                   </span>
                   <span className="stage-title">
-                    Hibrit Birleştirme — BM25 (%{Math.round(result.settings.bm25Weight * 100)}) + {isColbertActive ? "ColBERT" : "Semantic"} (%{Math.round(result.settings.semanticWeight * 100)})
+                    Hibrit Birleştirme — BM25 (%{Math.round(result.settings.bm25Weight * 100)}) + Semantic (%{Math.round(result.settings.semanticWeight * 100)})
                   </span>
                 </div>
                 <AlgoInfo variant="rrf" query={result.query} />
@@ -1505,7 +1419,7 @@ export default function App() {
             </div>
             <div className="empty-title">Semantik Arama Konsolu</div>
             <div className="empty-desc">
-              Arama sorgusu girerek BM25 sözcüksel filtrelemesini, Dense ve ColBERT vektörel çıkarımlarını,
+              Arama sorgusu girerek BM25 sözcüksel filtrelemesini, Dense vektörel çıkarımlarını,
               RRF birleşimini ve Cross-Encoder derin alaka skorlarını adım adım analiz edebilirsiniz.
             </div>
           </div>
@@ -1522,64 +1436,6 @@ export default function App() {
         </div>
 
         <div className="sidebar-body">
-          {/* Semantik Model Seçici (DENSE vs COLBERT) */}
-          <div className="settings-group">
-            <div className="settings-group-label">Semantik Arama Modu</div>
-            <div className="mode-toggle">
-              <button
-                type="button"
-                className={`mode-btn ${settings.semanticMode === "DENSE" ? "active dense" : ""}`}
-                onClick={() => setSetting("semanticMode", "DENSE")}
-                title="BGE-M3 1024-boyutlu yoğun vektör ve HNSW graf araması"
-              >
-                BGE-M3 (Dense)
-              </button>
-              <button
-                type="button"
-                className={`mode-btn ${settings.semanticMode === "COLBERT" ? "active colbert" : ""}`}
-                onClick={() => setSetting("semanticMode", "COLBERT")}
-                title="ColBERT token seviyesinde çoklu vektör ve Qdrant MaxSim eşleşmesi"
-              >
-                ColBERT (MaxSim)
-              </button>
-            </div>
-
-            {settings.semanticMode === "COLBERT" && (
-              <div style={{ marginTop: "8px" }}>
-                <button
-                  type="button"
-                  onClick={handleSyncQdrant}
-                  disabled={syncLoading}
-                  style={{
-                    width: "100%",
-                    padding: "6px 10px",
-                    background: "rgba(249, 115, 22, 0.12)",
-                    border: "1px solid rgba(249, 115, 22, 0.35)",
-                    borderRadius: "4px",
-                    color: "#fb923c",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    cursor: syncLoading ? "wait" : "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px"
-                  }}
-                  title="OpenSearch dökümanlarını Qdrant Multi-Vector veritabanına eşitler"
-                >
-                  {syncLoading ? "Qdrant'a Eşitleniyor..." : "Qdrant Senkronizasyonu"}
-                </button>
-                {syncStatus && (
-                  <div style={{ fontSize: "11px", marginTop: "5px", color: "#fb923c", textAlign: "center", lineHeight: 1.3 }}>
-                    {syncStatus}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="divider" />
-
           {/* Weights */}
           <div className="settings-group">
             <div className="settings-group-label">Ağırlıklar (RRF Katsayıları)</div>
@@ -1595,7 +1451,7 @@ export default function App() {
             </div>
             <div className="slider-control">
               <div className="slider-label-row">
-                <span className="slider-label">{settings.semanticMode === "COLBERT" ? "ColBERT Ağırlığı" : "Semantic Ağırlığı"}</span>
+                <span className="slider-label">Semantic Ağırlığı</span>
                 <span className="slider-value sem">{settings.semanticWeight.toFixed(2)}</span>
               </div>
               <input id="slider-semantic" type="range" className="sem"

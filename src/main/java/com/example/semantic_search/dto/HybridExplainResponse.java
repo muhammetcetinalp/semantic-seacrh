@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Hibrit arama sürecinin her aşamasını (BM25, Dense/ColBERT, RRF Füzyon ve Reranker)
+ * Hibrit arama sürecinin her aşamasını (BM25, Dense Vektör, RRF Füzyon ve Reranker)
  * şeffaf bir şekilde arayüze sunan açıklayıcı yanıt kaydı (Record DTO).
  *
  * @param query Çalıştırılan arama sorgusu
@@ -12,7 +12,7 @@ import java.util.Map;
  * @param tookMs Toplam hibrit arama süresi (ms)
  * @param settings Sorgu anında kullanılan katsayılar ve parametreler
  * @param bm25 BM25 sözcüksel arama aşamasının sonuçları ve süresi
- * @param semantic Vektörel/ColBERT semantik arama aşamasının sonuçları ve süresi
+ * @param semantic Vektörel semantik arama aşamasının sonuçları ve süresi
  * @param finalResults RRF veya skor normalizasyonu ile birleştirilmiş nihai liste
  * @param totalCandidates Havuzdan toplanan tekil aday döküman sayısı
  * @param rerank Cross-Encoder derin alaka skorlama aşamasının sonuçları (aktif değilse null)
@@ -82,20 +82,11 @@ public record HybridExplainResponse(
     /**
      * Tek bir arama kolunun (BM25 veya Semantik) sonuçlarını barındıran aşama kaydı.
      *
-     * @param method Kullanılan yöntem adı (örn: BM25, DENSE, COLBERT)
+     * @param method Kullanılan yöntem adı (örn: BM25, DENSE)
      * @param tookMs Bu kolun icra süresi (ms)
      * @param results Sıralanmış aday sonuçlar listesi
      */
     public record SearchStage(String method, long tookMs, List<RankedResult> results) { }
-
-    /**
-     * ColBERT token seviyesi MaxSim etkileşim eşleşme kaydı.
-     *
-     * @param queryToken Sorgudaki token
-     * @param matchedDocToken Dökümanda en yüksek benzerliği veren token
-     * @param similarity İki token arasındaki kosinüs benzerliği skoru
-     */
-    public record TokenMatch(String queryToken, String matchedDocToken, double similarity) { }
 
     /**
      * Tek bir arama kolunda derece almış aday doküman kaydı.
@@ -103,13 +94,8 @@ public record HybridExplainResponse(
      * @param rank Bu koldaki sırası (1'den başlar)
      * @param originalScore Modelden veya OpenSearch'ten gelen ham skor
      * @param document Dokümanın kendisi
-     * @param tokenMatches ColBERT token etkileşimleri listesi (ColBERT değilse boş)
      */
-    public record RankedResult(int rank, double originalScore, SearchResult document, List<TokenMatch> tokenMatches) {
-        public RankedResult(int rank, double originalScore, SearchResult document) {
-            this(rank, originalScore, document, List.of());
-        }
-    }
+    public record RankedResult(int rank, double originalScore, SearchResult document) { }
 
     /**
      * RRF veya skor normalizasyonu ile hesaplanan nihai birleşim sonucu kaydı.

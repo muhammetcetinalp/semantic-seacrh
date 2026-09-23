@@ -16,21 +16,14 @@ export type SearchDocument = {
   score?: number;
 };
 
-export type TokenMatch = {
-  queryToken: string;
-  matchedDocToken: string;
-  similarity: number;
-};
-
 export type RankedResult = {
   rank: number;
   originalScore: number;
   document: SearchDocument;
-  tokenMatches?: TokenMatch[] | null;
 };
 
 export type SearchStage = {
-  method: "BM25" | "SEMANTIC" | "COLBERT" | string;
+  method: "BM25" | "SEMANTIC" | string;
   tookMs: number;
   results: RankedResult[];
 };
@@ -96,7 +89,6 @@ export type UiSettings = {
   indexName: string;
   types: string;
   filters: string;
-  semanticMode: "DENSE" | "COLBERT";
 };
 
 export type HybridExplainRequest = {
@@ -109,6 +101,5 @@ export type HybridExplainRequest = {
   indexName?: string;
   types?: string[];
   filters?: Record<string, unknown>;
-  semanticMode?: "DENSE" | "COLBERT";
   fusionMode?: string;
 };

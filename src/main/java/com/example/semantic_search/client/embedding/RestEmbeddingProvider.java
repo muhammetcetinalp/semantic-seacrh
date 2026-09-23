@@ -34,12 +34,22 @@ public class RestEmbeddingProvider implements EmbeddingProvider {
      * @param properties Uç nokta ve model yapılandırması
      */
     public RestEmbeddingProvider(RestClient.Builder restClientBuilder, EmbeddingProperties properties) {
-        this.restClient = restClientBuilder
-                .baseUrl(properties.getEndpoint())
-                .build();
+        RestClient.Builder builder = restClientBuilder.baseUrl(properties.getEndpoint());
+        if (properties.getApiKey() != null && !properties.getApiKey().isBlank()) {
+            String key = properties.getApiKey().trim();
+            String header = properties.getApiKeyHeader() != null ? properties.getApiKeyHeader().trim() : "Authorization";
+            if ("Authorization".equalsIgnoreCase(header) && !key.toLowerCase().startsWith("bearer ")) {
+                builder.defaultHeader("Authorization", "Bearer " + key);
+            } else {
+                builder.defaultHeader(header, key);
+            }
+            builder.defaultHeader("X-API-Key", key);
+        }
+        this.restClient = builder.build();
         this.properties = properties;
-        log.info("REST embedding sağlayıcısı aktif — endpoint={}, model={}",
-                properties.getEndpoint(), properties.getModel());
+        log.info("REST embedding sağlayıcısı aktif — endpoint={}, model={}, auth={}",
+                properties.getEndpoint(), properties.getModel(),
+                (properties.getApiKey() != null && !properties.getApiKey().isBlank()) ? "API-Key aktif" : "yok");
     }
 
     /**

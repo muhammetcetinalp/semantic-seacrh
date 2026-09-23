@@ -2,15 +2,12 @@ package com.example.semantic_search.service;
 
 import com.example.semantic_search.client.embedding.EmbeddingProvider;
 import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
-import com.example.semantic_search.client.qdrant.QdrantAdapter;
-import com.example.semantic_search.config.ColbertProperties;
 import com.example.semantic_search.config.SearchProperties;
 import com.example.semantic_search.dto.HybridExplainRequest;
 import com.example.semantic_search.dto.HybridExplainResponse;
 import com.example.semantic_search.dto.SearchRequest;
 import com.example.semantic_search.dto.SearchResponse;
 import com.example.semantic_search.dto.SearchResult;
-import com.example.semantic_search.model.QdrantSearchResult;
 import com.example.semantic_search.model.SearchType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,8 +24,7 @@ import java.util.*;
  *   <li><b>BM25</b>: OpenSearch Türkçe dilbilgisel ve alana göre ağırlıklandırılmış tam metin araması.</li>
  *   <li><b>Yoğun Vektör (Dense Vector)</b>: BGE-M3 / TEI 1024 boyutlu gömme vektörleri ile k-NN kosinüs benzerliği.</li>
  *   <li><b>Hibrit Arama (Hybrid Search)</b>: Reciprocal Rank Fusion (RRF) veya Normalize Skor Füzyonu ile BM25 ve Vektör sıralamalarının harmanlanması.</li>
- *   <li><b>ColBERT Geç Etkileşim (Late Interaction)</b>: Qdrant MaxSim çoklu-vektör hızlı yolu veya bellek içi saf Java ColBERT hesaplaması.</li>
- *   <li><b>Cross-Encoder Yeniden Sıralama (Reranking)</b>: İlk aşama aday sonuçlarının TEI/Infinity/Ollama derin dikkat modeliyle tekrar sıralanması.</li>
+ *   <li><b>Cross-Encoder Yeniden Sıralama (Reranking)</b>: İlk aşama aday sonuçlarının TEI / Harici Model API derin dikkat modeliyle tekrar sıralanması.</li>
  *   <li><b>Arama Günlüğü (Audit Logging)</b>: Tüm isteklerin ve metriklerin PostgreSQL'e asenkron kaydedilmesi.</li>
  * </ul>
  * </p>
@@ -43,9 +39,6 @@ public class SearchQueryService {
     private final SearchProperties searchProperties;
     private final SearchQueryLogService queryLogService;
     private final Optional<RerankingService> rerankingService;
-    private final Optional<ColbertService> colbertService;
-    private final Optional<QdrantAdapter> qdrantAdapter;
-    private final Optional<ColbertProperties> colbertProperties;
 
     /**
      * SearchQueryService için gerekli tüm altyapı bağımlılıklarını enjekte eden ana yapıcı metot.
@@ -55,30 +48,19 @@ public class SearchQueryService {
      * @param searchProperties Varsayılan arama yapılandırma parametreleri
      * @param queryLogService Arama loglama servisi
      * @param rerankingService İsteğe bağlı Cross-Encoder reranking servisi
-     * @param colbertService İsteğe bağlı ColBERT servisi
-     * @param qdrantAdapter İsteğe bağlı Qdrant adaptörü
-     * @param colbertProperties İsteğe bağlı ColBERT yapılandırma özellikleri
      */
     @Autowired
     public SearchQueryService(OpenSearchAdapter openSearchAdapter,
                               EmbeddingProvider embeddingProvider,
                               SearchProperties searchProperties,
                               SearchQueryLogService queryLogService,
-                              Optional<RerankingService> rerankingService,
-                              Optional<ColbertService> colbertService,
-                              Optional<QdrantAdapter> qdrantAdapter,
-                              Optional<ColbertProperties> colbertProperties) {
+                              Optional<RerankingService> rerankingService) {
         this.openSearchAdapter = openSearchAdapter;
         this.embeddingProvider = embeddingProvider;
         this.searchProperties = searchProperties;
         this.queryLogService = queryLogService;
         this.rerankingService = rerankingService;
-        this.colbertService = colbertService != null ? colbertService : Optional.empty();
-        this.qdrantAdapter = qdrantAdapter != null ? qdrantAdapter : Optional.empty();
-        this.colbertProperties = colbertProperties != null ? colbertProperties : Optional.empty();
         rerankingService.ifPresent(r -> log.info("Yeniden sıralama (Reranking) aktif — {}", r.getClass().getSimpleName()));
-        this.colbertService.ifPresent(c -> log.info("ColBERT arama entegrasyonu hazır"));
-        this.qdrantAdapter.ifPresent(q -> log.info("Qdrant çoklu-vektör deposu entegrasyonu hazır"));
     }
 
     /**
@@ -130,8 +112,8 @@ public class SearchQueryService {
     }
 
     /**
-     * Hibrit aramanın tüm aşamalarını (BM25, Semantik/ColBERT, RRF/Score Füzyonu, Reranker)
-     * eşzamanlı çalıştırıp her aşamanın katkısını ve token eşleşmelerini açıklayan analiz metodu.
+     * Hibrit aramanın tüm aşamalarını (BM25, Semantik Vektör, RRF/Score Füzyonu, Reranker)
+     * eşzamanlı çalıştırıp her aşamanın katkısını açıklayan analiz metodu.
      *
      * @param request Hibrit açıklama isteği
      * @return Detaylı aşama dökümünü içeren HybridExplainResponse
@@ -162,105 +144,11 @@ public class SearchQueryService {
                         return new Bm25ExecutionResult(hits, System.currentTimeMillis() - start);
                     });
 
-            boolean useColbert = "COLBERT".equalsIgnoreCase(request.getSemanticMode())
-                    && colbertService.filter(ColbertService::isAvailable).isPresent();
-
             long semanticStartedAt = System.currentTimeMillis();
-            List<SearchResult> semanticResults;
-            List<HybridExplainResponse.RankedResult> rankedSemantic;
-            String semanticStageName;
-
-            if (useColbert) {
-                semanticStageName = "COLBERT";
-                boolean useQdrant = colbertProperties.map(p -> "qdrant".equalsIgnoreCase(p.getStorage())).orElse(false)
-                        && qdrantAdapter.filter(QdrantAdapter::isAvailable).isPresent();
-
-                List<SearchResult> colbertDocs = null;
-                List<HybridExplainResponse.RankedResult> colbertRanked = null;
-
-                if (useQdrant) {
-                    // Qdrant Çoklu-Vektör Hızlı Yolu: Yalnızca sorguyu göm, dokümanları tekrar gömmekten kaçın!
-                    List<List<Float>> queryVectors = colbertService.get().embedQuery(request.getQuery());
-                    if (queryVectors != null && !queryVectors.isEmpty()) {
-                        List<QdrantSearchResult> qdrantHits = qdrantAdapter.get().searchMaxSim(queryVectors, filters, candidateLimit);
-                        if (qdrantHits != null && !qdrantHits.isEmpty()) {
-                            log.info("ColBERT araması Qdrant MaxSim üzerinden çalıştırıldı — {} isabet alındı", qdrantHits.size());
-
-                            List<String> hitIds = qdrantHits.stream()
-                                    .map(QdrantSearchResult::entityId)
-                                    .filter(Objects::nonNull)
-                                    .toList();
-
-                            List<SearchResult> osDocs = openSearchAdapter.getDocumentsByIds(indexName, hitIds);
-                            Map<String, SearchResult> docMap = new HashMap<>();
-                            for (SearchResult c : osDocs) {
-                                docMap.put(c.getId(), c);
-                            }
-
-                            List<SearchResult> orderedDocs = new ArrayList<>();
-                            List<HybridExplainResponse.RankedResult> ranked = new ArrayList<>();
-
-                            for (int i = 0; i < qdrantHits.size(); i++) {
-                                QdrantSearchResult hit = qdrantHits.get(i);
-                                SearchResult doc = docMap.get(hit.entityId());
-                                if (doc == null) {
-                                    try {
-                                        Map<String, Object> single = openSearchAdapter.getDocument(indexName, hit.entityId());
-                                        if (single != null) {
-                                            doc = openSearchAdapter.mapSource(single);
-                                        }
-                                    } catch (Exception ignored) {
-                                    }
-                                }
-                                if (doc == null) {
-                                    doc = new SearchResult();
-                                    doc.setId(hit.entityId());
-                                    doc.setTitle((String) hit.payload().getOrDefault("title", ""));
-                                    doc.setSearchText((String) hit.payload().getOrDefault("searchText", ""));
-                                    doc.setShortText((String) hit.payload().getOrDefault("shortText", ""));
-                                    doc.setLongText((String) hit.payload().getOrDefault("longText", ""));
-                                    doc.setBirim((String) hit.payload().getOrDefault("birim", ""));
-                                    doc.setAdres((String) hit.payload().getOrDefault("adres", ""));
-                                    doc.setTarih((String) hit.payload().getOrDefault("tarih", ""));
-                                    doc.setType((String) hit.payload().getOrDefault("type", ""));
-                                }
-                                doc.setScore(hit.score());
-                                orderedDocs.add(doc);
-                                List<HybridExplainResponse.TokenMatch> tokenMatches = List.of();
-                                if (colbertService.isPresent() && (doc.getSearchText() != null || doc.getTitle() != null)) {
-                                    tokenMatches = colbertService.get().computeTokenMatches(
-                                            request.getQuery(), doc.getTitle(), doc.getSearchText());
-                                }
-                                ranked.add(new HybridExplainResponse.RankedResult(
-                                         i + 1, hit.score(), doc, tokenMatches
-                                ));
-                            }
-                            colbertDocs = orderedDocs;
-                            colbertRanked = ranked;
-                        }
-                    }
-                }
-
-                // Qdrant henüz senkronize değilse veya sonuç dönmediyse Java bellek içi ColBERT motoruna geri düş (fallback)
-                if (colbertDocs == null) {
-                    List<SearchResult> bm25Candidates = bm25Future.join().results();
-                    List<SearchResult> candidatePool = !bm25Candidates.isEmpty()
-                            ? bm25Candidates
-                            : openSearchAdapter.getCandidates(indexName, filters, candidateLimit * 2);
-                    var colbertRank = colbertService.get().scoreAndRank(request.getQuery(), candidatePool, candidateLimit);
-                    colbertDocs = colbertRank.orderedDocuments();
-                    colbertRanked = colbertRank.rankedResults();
-                }
-
-                semanticResults = colbertDocs;
-                rankedSemantic = colbertRanked;
-            } else {
-                semanticStageName = "SEMANTIC";
-                float[] queryVector = embeddingProvider.generateEmbedding(request.getQuery());
-                semanticResults = openSearchAdapter.vectorSearch(
-                        indexName, queryVector, filters, candidateLimit);
-                rankedSemantic = rank(semanticResults);
-            }
+            float[] queryVector = embeddingProvider.generateEmbedding(request.getQuery());
+            List<SearchResult> semanticResults = openSearchAdapter.vectorSearch(
+                    indexName, queryVector, filters, candidateLimit);
+            List<HybridExplainResponse.RankedResult> rankedSemantic = rank(semanticResults);
             long semanticTookMs = System.currentTimeMillis() - semanticStartedAt;
 
             // BM25 sonucunu bekle
@@ -286,7 +174,7 @@ public class SearchQueryService {
             var result = new HybridExplainResponse(
                     request.getQuery(), indexName, System.currentTimeMillis() - startedAt, settings,
                     new HybridExplainResponse.SearchStage("BM25", bm25TookMs, rankedBm25),
-                    new HybridExplainResponse.SearchStage(semanticStageName, semanticTookMs, rankedSemantic),
+                    new HybridExplainResponse.SearchStage("SEMANTIC", semanticTookMs, rankedSemantic),
                     finalResults, totalCandidates,
                     buildRerankStage(request.getQuery(), finalResults, limit));
 

@@ -26,7 +26,7 @@ public class OlaylarController {
     }
 
     /**
-     * {@code olaylar.json} dosyasındaki verileri OpenSearch ve Qdrant sistemlerine aktarır.
+     * {@code olaylar.json} dosyasındaki verileri OpenSearch sistemine aktarır.
      *
      * @param limit Aktarılacak kayıt sayısı (varsayılan: 1000)
      * @param enableDenseEmbedding Yoğun vektör üretimi aktif mi (varsayılan: false)

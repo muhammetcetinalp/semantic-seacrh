@@ -36,12 +36,22 @@ public class TeiEmbeddingProvider implements EmbeddingProvider {
      * @param properties TEI uç noktası ve model özellikleri
      */
     public TeiEmbeddingProvider(RestClient.Builder restClientBuilder, EmbeddingProperties properties) {
-        this.restClient = restClientBuilder
-                .baseUrl(properties.getEndpoint())
-                .build();
+        RestClient.Builder builder = restClientBuilder.baseUrl(properties.getEndpoint());
+        if (properties.getApiKey() != null && !properties.getApiKey().isBlank()) {
+            String key = properties.getApiKey().trim();
+            String header = properties.getApiKeyHeader() != null ? properties.getApiKeyHeader().trim() : "Authorization";
+            if ("Authorization".equalsIgnoreCase(header) && !key.toLowerCase().startsWith("bearer ")) {
+                builder.defaultHeader("Authorization", "Bearer " + key);
+            } else {
+                builder.defaultHeader(header, key);
+            }
+            builder.defaultHeader("X-API-Key", key);
+        }
+        this.restClient = builder.build();
         this.properties = properties;
-        log.info("TEI embedding sağlayıcısı devrede — endpoint={}, model={}, dims={}",
-                properties.getEndpoint(), properties.getModel(), properties.getDimensions());
+        log.info("TEI embedding sağlayıcısı devrede — endpoint={}, model={}, dims={}, auth={}",
+                properties.getEndpoint(), properties.getModel(), properties.getDimensions(),
+                (properties.getApiKey() != null && !properties.getApiKey().isBlank()) ? "API-Key aktif" : "yok");
     }
 
     /**

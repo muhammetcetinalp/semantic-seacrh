@@ -45,15 +45,6 @@ services:
       retries: 10
       start_period: 5s
     restart: unless-stopped
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
-      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
-    volumes:
-      - qdrant-data:/qdrant/storage
-    restart: unless-stopped
-
   kafka:
     image: apache/kafka:3.7.0
     ports:
@@ -93,7 +84,6 @@ services:
 volumes:
   opensearch-data:
   pg17-data:
-  qdrant-data:
   kafka-data:
   reranker-data:
 

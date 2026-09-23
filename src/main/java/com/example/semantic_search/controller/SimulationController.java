@@ -83,9 +83,9 @@ public class SimulationController {
                 "publishedCount", status.publishedCount(),
                 "targetLimit", status.targetLimit(),
                 "delayMs", status.delayMs(),
-                "topic", status.topic(),
-                "bootstrapServers", status.bootstrapServers(),
-                "status", status.status(),
+                "topic", status.topic() != null ? status.topic() : "",
+                "bootstrapServers", status.bootstrapServers() != null ? status.bootstrapServers() : "",
+                "status", status.status() != null ? status.status() : "IDLE",
                 "lastEventSummary", status.lastEventSummary() != null ? status.lastEventSummary() : "",
                 "dbRecordedCount", dbRecordedCount
         ));

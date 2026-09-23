@@ -32,4 +32,13 @@ public class WebConfiguration implements WebMvcConfigurer {
                 .allowCredentials(false)
                 .maxAge(3600);
     }
+
+    /**
+     * Model istemcileri (Embedding & Reranker) için standart RestClient.Builder bileşeni.
+     */
+    @org.springframework.context.annotation.Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+    public org.springframework.web.client.RestClient.Builder restClientBuilder() {
+        return org.springframework.web.client.RestClient.builder();
+    }
 }

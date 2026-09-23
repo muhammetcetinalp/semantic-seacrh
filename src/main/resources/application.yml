@@ -4,20 +4,29 @@ spring:
   application:
     name: semantic-search
   datasource:
-    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:semantic_search}}
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:semantic_search}${DB_PARAMS:}}
     username: ${DB_USERNAME:semantic_search}
     password: ${DB_PASSWORD:SearchDev2026}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: ${DB_CONNECTION_TIMEOUT:30000}
+      maximum-pool-size: ${DB_MAX_POOL_SIZE:10}
+      minimum-idle: ${DB_MIN_IDLE:2}
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      keepalive-time: 30000
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
     properties:
       hibernate:
-        default_schema: public
+        default_schema: ${DB_SCHEMA:public}
   flyway:
-    enabled: true
+    enabled: ${FLYWAY_ENABLED:true}
     locations: classpath:db/migration
+    default-schema: ${DB_SCHEMA:public}
+    create-schemas: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     admin:
@@ -69,6 +78,10 @@ search:
         operation: DELETE
         index-name: olaylar
         document-type: OLAY
+      "[IncidentCreated]":
+        operation: UPSERT
+        index-name: olaylar
+        document-type: OLAY
   opensearch:
     host: ${OPENSEARCH_HOST:localhost}
     port: ${OPENSEARCH_PORT:9200}
@@ -77,6 +90,8 @@ search:
     password: ${OPENSEARCH_PASSWORD:}
     connect-timeout: ${OPENSEARCH_CONNECT_TIMEOUT:5000}
     socket-timeout: ${OPENSEARCH_SOCKET_TIMEOUT:60000}
+  ai:
+    api-key: ${AI_API_KEY:}
   embedding:
     provider: ${EMBEDDING_PROVIDER:mock}        # mock | tei | rest
     endpoint: ${EMBEDDING_ENDPOINT:http://localhost:8081}
@@ -84,21 +99,15 @@ search:
     dimensions: ${EMBEDDING_DIMENSIONS:384}
     timeout: ${EMBEDDING_TIMEOUT:30000}
     mock-enabled: ${EMBEDDING_MOCK_ENABLED:true}
+    api-key: ${EMBEDDING_API_KEY:${AI_API_KEY:}}
+    api-key-header: ${EMBEDDING_API_KEY_HEADER:Authorization}
   reranking:
     enabled: ${SEARCH_RERANKING_ENABLED:true}
-    provider: ${SEARCH_RERANKING_PROVIDER:tei}   # tei (Hugging Face TEI Cross-Encoder) | ollama
+    provider: ${SEARCH_RERANKING_PROVIDER:tei}   # tei (Hugging Face TEI / Infinity / REST Cross-Encoder)
     endpoint: ${SEARCH_RERANKING_ENDPOINT:http://localhost:8082}
     model: ${SEARCH_RERANKING_MODEL:BAAI/bge-reranker-v2-m3}
-  colbert:
-    enabled: ${SEARCH_COLBERT_ENABLED:true}
-    provider: ${SEARCH_COLBERT_PROVIDER:java}     # java (pure in-memory)
-    model: ${SEARCH_COLBERT_MODEL:jinaai/jina-colbert-v2}
-    storage: ${SEARCH_COLBERT_STORAGE:qdrant}     # qdrant | direct
-  qdrant:
-    enabled: ${SEARCH_QDRANT_ENABLED:true}
-    endpoint: ${SEARCH_QDRANT_ENDPOINT:http://localhost:6333}
-    collection-name: ${SEARCH_QDRANT_COLLECTION:colbert_olaylar}
-    vector-size: 128
+    api-key: ${SEARCH_RERANKING_API_KEY:${AI_API_KEY:}}
+    api-key-header: ${SEARCH_RERANKING_API_KEY_HEADER:Authorization}
   defaults:
     limit: ${SEARCH_DEFAULT_LIMIT:20}
     max-limit: ${SEARCH_MAX_LIMIT:100}

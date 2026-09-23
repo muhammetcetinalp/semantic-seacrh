@@ -38,12 +38,33 @@ public class TeiRerankingService implements RerankingService {
      */
     public TeiRerankingService(
             RestClient.Builder restClientBuilder,
+            String endpoint,
+            String model) {
+        this(restClientBuilder, endpoint, model, null, "Authorization");
+    }
+
+    public TeiRerankingService(
+            RestClient.Builder restClientBuilder,
             @Value("${search.reranking.endpoint:http://localhost:8082}") String endpoint,
-            @Value("${search.reranking.model:BAAI/bge-reranker-v2-m3}") String model) {
+            @Value("${search.reranking.model:BAAI/bge-reranker-v2-m3}") String model,
+            @Value("${search.reranking.api-key:${search.ai.api-key:}}") String apiKey,
+            @Value("${search.reranking.api-key-header:Authorization}") String apiKeyHeader) {
         this.endpoint = endpoint;
         this.model = model;
-        this.restClient = restClientBuilder.baseUrl(endpoint).build();
-        log.info("Cross-Encoder Reranker aktif — provider=tei, endpoint={}, model={}", endpoint, model);
+        RestClient.Builder builder = restClientBuilder.baseUrl(endpoint);
+        if (apiKey != null && !apiKey.isBlank()) {
+            String key = apiKey.trim();
+            String header = apiKeyHeader != null ? apiKeyHeader.trim() : "Authorization";
+            if ("Authorization".equalsIgnoreCase(header) && !key.toLowerCase().startsWith("bearer ")) {
+                builder.defaultHeader("Authorization", "Bearer " + key);
+            } else {
+                builder.defaultHeader(header, key);
+            }
+            builder.defaultHeader("X-API-Key", key);
+        }
+        this.restClient = builder.build();
+        log.info("Cross-Encoder Reranker aktif — provider=tei, endpoint={}, model={}, auth={}",
+                endpoint, model, (apiKey != null && !apiKey.isBlank()) ? "API-Key aktif" : "yok");
     }
 
     /**

@@ -1,7 +1,7 @@
 # 🔍 Uçtan Uca Arama Akışı ve Mimari Derin Dalış Rehberi
 *(End-to-End Search Pipeline & Request Lifecycle Architecture)*
 
-Bu doküman, bir kullanıcının arama kutusuna bir sorgu yazıp arattığı andan itibaren; **ColBERT (BERT Çoklu Vektör)** veya **Düz Semantik (Dense BGE-M3)** modunda isteğin ağ üzerinde nereye gittiğini, kimin karşıladığını, hangi sınıfların ve motorların sırasıyla nasıl çalıştığını ve sonucun tarayıcıya nasıl döndüğünü **uçtan uca, tüm teknik detaylarıyla** adım adım açıklamaktadır.
+Bu doküman, bir kullanıcının arama kutusuna bir sorgu yazıp arattığı andan itibaren isteğin ağ üzerinde nereye gittiğini, kimin karşıladığını, hangi sınıfların ve motorların sırasıyla nasıl çalıştığını ve sonucun tarayıcıya nasıl döndüğünü **uçtan uca, tüm teknik detaylarıyla** adım adım açıklamaktadır.
 
 ---
 
@@ -18,13 +18,12 @@ sequenceDiagram
     participant Controller as 🎮 SearchController
     participant Service as ⚙️ SearchQueryService
     participant OS as 🔎 OpenSearch 3.8.0 (Port 9200)
-    participant Qdrant as ⚡ Qdrant DB (Port 6333)
-    participant Ollama as 🧠 Ollama / BGE-M3 (Port 11434)
-    participant Reranker as 🎯 Cross-Encoder Reranker
+    participant Embedder as 🧠 Embedding Modeli (BGE-M3 API / SSL)
+    participant Reranker as 🎯 Cross-Encoder Reranker (BGE-Reranker API / SSL)
     participant Postgres as 🐘 PostgreSQL 17 (Port 5432)
 
     User->>UI: 1. Arama Sorgusu Yazar & "Ara" Butonuna Basar
-    Note over UI: Mod: COLBERT veya DENSE<br/>Filtreler: Birim, Tarih, Konum<br/>Parametreler: limit, çarpan, k, ağırlıklar
+    Note over UI: Filtreler: Birim, Tarih, Konum<br/>Parametreler: limit, çarpan, k, ağırlıklar
 
     UI->>Tomcat: 2. POST /api/v1/search/explain (JSON Body)
     Note over UI,Tomcat: Vite Proxy üzerinden :5173 -> :8080 yönlendirilir
@@ -38,47 +37,35 @@ sequenceDiagram
     Note over OS: turkish_search analyzer, multi_match,<br/>bool filtreler (candidateLimit adet)
     OS-->>Service: 6. BM25 Aday Listesi (Skorlar & Dökümanlar)
 
-    alt Mod: COLBERT (Token-Level MaxSim)
-        Service->>Service: 7a. colbertService.embedQuery(query)
-        Note over Service: JavaColbertEngine: Sorguyu 128-boyutlu<br/>kelime vektörlerine böler (Lq x 128)
-        Service->>Qdrant: 8a. POST /collections/colbert_olaylar/points/query
-        Note over Qdrant: C++ Donanım Hızlandırmalı MaxSim Araması<br/>(candidateLimit adet en yakın entityId)
-        Qdrant-->>Service: 9a. Qdrant Hit Listesi (entityId & MaxSim skorları)
-        Service->>OS: 10a. getDocumentsByIds(indexName, hitIds)
-        Note over OS: Dökümanların başlık, detay ve özet metinleri<br/>OpenSearch'ten eksiksiz hidrate edilir
-        OS-->>Service: 11a. Tam Döküman İçerikleri
-        Service->>Service: 12a. computeTokenMatches(query, docText)
-    else Mod: DENSE (Standart Kosinüs Semantik)
-        Service->>Ollama: 7b. POST /v1/embeddings (Model: bge-m3)
-        Ollama-->>Service: 8b. Tekil 1024-Boyutlu Dense Vektör (float[1024])
-        Service->>OS: 9b. vectorSearch (kNN cosine similarity)
-        OS-->>Service: 10b. Vektör Aday Listesi
-    end
+    Service->>Embedder: 7. POST /v1/embeddings (Model: BGE-M3)
+    Embedder-->>Service: 8. Tekil 1024-Boyutlu Dense Vektör (float[1024])
+    Service->>OS: 9. vectorSearch (kNN cosine similarity)
+    OS-->>Service: 10. Vektör Aday Listesi
     end
 
     rect rgb(255, 250, 240)
     Note over Service: ── AŞAMA 2: RRF Hibrit Füzyon (Reciprocal Rank Fusion) ──
-    Service->>Service: 13. fuse(BM25, Semantic, bm25Weight, semWeight, k=60, limit)
+    Service->>Service: 11. fuse(BM25, Semantic, bm25Weight, semWeight, k=60, limit)
     Note over Service: RRF Skorları toplanır, katkı oranları hesaplanır,<br/>en iyi 'limit' adet döküman seçilir
     end
 
     rect rgb(245, 255, 245)
     Note over Service: ── AŞAMA 3: İkinci Aşama Yeniden Sıralama (Cross-Encoder) ──
-    Service->>Reranker: 14. rerank(query, finalResults, limit)
-    Note over Reranker: Saf Java Cross-Encoder: (Sorgu, Metin) çiftini<br/>bağlamsal analiz edip 0-1 arası kesin puan üretir
-    Reranker-->>Service: 15. Yeniden Sıralanmış Liste (Rank Delta: +2, -1, =0)
+    Service->>Reranker: 12. rerank(query, finalResults, limit)
+    Note over Reranker: Cross-Encoder: (Sorgu, Metin) çiftini<br/>bağlamsal analiz edip 0-1 arası kesin alaka puanı üretir
+    Reranker-->>Service: 13. Yeniden Sıralanmış Liste (Rank Delta: +2, -1, =0)
     end
 
     rect rgb(255, 245, 245)
     Note over Service: ── AŞAMA 4: Denetim & İstatistik Kaydı ──
-    Service->>Postgres: 16. logSuccess (INSERT INTO search_query_log)
+    Service->>Postgres: 14. logSuccess (INSERT INTO search_query_log)
     Note over Postgres: Sorgu metni, çalışma süresi, limitler,<br/>ağırlıklar PostgreSQL tablosuna yazılır
     end
 
-    Service-->>Controller: 17. HybridExplainResponse DTO
-    Controller-->>Tomcat: 18. HTTP 200 OK + JSON
-    Tomcat-->>UI: 19. Yanıt Frontend'e Teslim Edilir
-    UI->>User: 20. 4 Sütunlu Görsel Arama Analiz Ekranı Çizilir
+    Service-->>Controller: 15. HybridExplainResponse DTO
+    Controller-->>Tomcat: 16. HTTP 200 OK + JSON
+    Tomcat-->>UI: 17. Yanıt Frontend'e Teslim Edilir
+    UI->>User: 18. 4 Sütunlu Görsel Arama Analiz Ekranı Çizilir
 ```
 
 ---
@@ -89,7 +76,7 @@ sequenceDiagram
 
 ### ADIM 1: Kullanıcı Arayüzü (Frontend) & İstek Formatı
 
-Kullanıcı `http://localhost:5173` adresindeki arama kutusuna örneğin `"İstanbul boğazı şüpheli gemi"` yazar ve arama modunu seçer.
+Kullanıcı `http://localhost:5173` adresindeki arama kutusuna örneğin `"İstanbul boğazı şüpheli gemi"` yazar ve filtreleri belirler.
 
 #### 1. İstek Nereye Atılır?
 * **Frontend İstek URL:** `http://localhost:5173/api/v1/search/explain`
@@ -108,7 +95,6 @@ Kullanıcı `http://localhost:5173` adresindeki arama kutusuna örneğin `"İsta
   "query": "İstanbul boğazı şüpheli gemi",
   "indexName": "olaylar",
   "searchType": "HYBRID",
-  "semanticMode": "COLBERT",
   "limit": 10,
   "candidateMultiplier": 3,
   "rankConstant": 60,
@@ -127,10 +113,10 @@ Kullanıcı `http://localhost:5173` adresindeki arama kutusuna örneğin `"İsta
 ```
 
 > **Önemli Parametreler:**
-> * `semanticMode`: `"COLBERT"` veya `"DENSE"`
 > * `limit`: Sonuç tablosunda gösterilecek nihai olay sayısı (örn: `10`).
 > * `candidateMultiplier`: İlk aşamada motorlardan kaç kat aday çekileceği (örn: `3` ise `10 x 3 = 30` aday toplanır).
 > * `rankConstant`: RRF sıralama yumuşatma katsayısı ($k=60$).
+> * `bm25Weight` & `semanticWeight`: BM25 ve Vektör aramasının bağıl ağırlıkları.
 
 ---
 
@@ -199,83 +185,31 @@ Sistem ilk olarak kelime bazlı tam metin (lexical) aramasını icra eder:
 
 ---
 
-### ADIM 5: Birinci Aşama (2) — Semantik Arama (ColBERT vs. Dense)
+### ADIM 5: Birinci Aşama (2) — Semantik Arama (Dense BGE-M3)
 
-Kullanıcının seçtiği `semanticMode` değerine göre iki farklı mimari yoldan biri işletilir:
+1. **Dense Vektör Üretimi (`EmbeddingProvider.java`):**
+   * Metin gömme modeli (Model API veya Hugging Face TEI / `BAAI/bge-m3`) çağrılır:
+     * **İstek URL:** `POST {EMBEDDING_ENDPOINT}` (Örn: `https://model-server.airgap.lan/v1/embeddings` veya `http://localhost:8081/embed`)
+     * **Dönen Cevap:** `1024` boyutlu tekil dense vektör: `float[1024]`
+   * Geliştirme ortamında model kapalıysa deterministik mock gömme kullanılır.
 
----
-
-#### 🌟 SEÇENEK A: ColBERT Modu (`semanticMode == "COLBERT"`)
-*(Late Interaction / Token-Level Multi-Vector Search)*
-
-ColBERT modunda sorgu tek bir vektöre indirgenmez; sorgudaki her bir kelime/alt-kelime için ayrı birer 128 boyutlu vektör üretilir.
-
-##### 1. Sorgu Tokenizasyonu ve Vektörleştirme (`JavaColbertEngine.java`):
-* Saf Java motoru sorguyu token'lara böler: `["[Q]", "istanb", "##ul", "bog", "##azi", "sup", "##heli", "gemi"]`
-* Her token için 128 boyutlu normalize edilmiş bir kayan noktalı vektör dizisi üretir:
-  $$\text{Query Vectors} \in \mathbb{R}^{L_q \times 128}$$
-* **Süre:** Tamamen RAM'de saf Java çalıştığı için sadece **0.2 - 0.5 milisaniye** sürer!
-
-##### 2. Qdrant Multi-Vector MaxSim Donanım Araması (`QdrantAdapter.java`):
-* **İstek URL:** `POST http://localhost:6333/collections/colbert_olaylar/points/query`
-* **JSON Gövdesi:**
-  ```json
-  {
-    "query": [
-      [-0.028, 0.054, ..., 0.012],
-      [0.081, -0.019, ..., -0.045]
-    ],
-    "using": "colbert",
-    "limit": 30,
-    "with_payload": true
-  }
-  ```
-* **Qdrant Ne Yapar?** Qdrant'ın C++ tabanlı SIMD/AVX-512 hızlandırmalı motoru şu MaxSim formülünü 10.000 olay matrisi üzerinde 1 milisaniyede hesaplar:
-  $$S(Q, D) = \sum_{q \in Q} \max_{d \in D} (Q_q \cdot D_d)$$
-* **Dönen Cevap:** En yüksek benzerlik puanına sahip 30 olayın `entityId` UUID listesini döner (Örn: `6d439641-71e0-42cf-9cf0-9a104f65eba1`).
-
-##### 3. OpenSearch'ten Döküman Tamamlama (Hydration):
-* Qdrant yalnızca vektör sakladığı için, dönen 30 UUID `openSearchAdapter.getDocumentsByIds(indexName, hitIds)` metoduna gönderilir.
-* OpenSearch'e tek bir batch `ids` sorgusu atılır:
-  ```json
-  { "query": { "ids": { "values": ["6d439641-...", "99843f0f-..."] } } }
-  ```
-* Olayların gerçek başlıkları (`title`), rapor detayları (`longText`), adresleri, koordinatları ve tarihleri OpenSearch'ten eksiksiz çekilerek doldurulur.
-
-##### 4. Token Etkileşim Eşleştirmesi (`computeTokenMatches`):
-* Hangi arama kelimesinin dökümandaki hangi kelimeyle yüzde kaç oranında örtüştüğü (MaxSim token alignment) hesaplanır:
-  * `"şüpheli"` $\longrightarrow$ `"şüpheli"` (%100)
-  * `"gemi"` $\longrightarrow$ `"fırkateyn"` (%78)
-
----
-
-#### 🌐 SEÇENEK B: Düz Semantik Modu (`semanticMode == "DENSE"`)
-*(Standart BGE-M3 1024-Boyutlu Kosinüs Vektör Araması)*
-
-##### 1. Dense Vektör Üretimi (`EmbeddingProvider.java`):
-* Eğer `.env` dosyasında `EMBEDDING_PROVIDER=rest` ayarlıysa, yerel Ollama servisine HTTP isteği gönderilir:
-  * **İstek URL:** `POST http://localhost:11434/v1/embeddings`
-  * **İstek Gövdesi:** `{"model": "bge-m3", "input": "İstanbul boğazı şüpheli gemi"}`
-  * **Dönen Cevap:** `1024` boyutlu tek bir dense vektör: `float[1024]`
-* Eğer `EMBEDDING_PROVIDER=mock` ise, GPU/Ollama gerektirmeyen deterministik test vektörü üretilir.
-
-##### 2. OpenSearch kNN Vektör Araması (`OpenSearchAdapter.java`):
-* **İstek URL:** `POST http://localhost:9200/olaylar/_search`
-* **JSON Gövdesi:**
-  ```json
-  {
-    "size": 30,
-    "query": {
-      "knn": {
-        "embedding": {
-          "vector": [-0.0283, 0.0035, ..., 0.0138],
-          "k": 30
-        }
-      }
-    }
-  }
-  ```
-* OpenSearch HNSW indeksi üzerinden kosinüs mesafesine göre en yakın 30 dökümanı getirir.
+2. **OpenSearch kNN Vektör Araması (`OpenSearchAdapter.java`):**
+   * **İstek URL:** `POST http://localhost:9200/olaylar/_search`
+   * **JSON Gövdesi:**
+     ```json
+     {
+       "size": 30,
+       "query": {
+         "knn": {
+           "embedding": {
+             "vector": [-0.0283, 0.0035, ..., 0.0138],
+             "k": 30
+           }
+         }
+       }
+     }
+     ```
+   * OpenSearch HNSW indeksi üzerinden kosinüs mesafesine göre en yakın 30 dökümanı çeker.
 
 ---
 
@@ -283,9 +217,9 @@ ColBERT modunda sorgu tek bir vektöre indirgenmez; sorgudaki her bir kelime/alt
 
 Artık elimizde iki ayrı aday havuzu vardır:
 * **Havuz 1:** 30 Adet BM25 Sonucu (Lucene TF-IDF skorlu)
-* **Havuz 2:** 30 Adet Semantik Sonuç (ColBERT MaxSim veya Kosinüs skorlu)
+* **Havuz 2:** 30 Adet Semantik Sonucu (Kosinüs benzerlik skorlu)
 
-Farklı skor skalalarını (örn: BM25 skoru `18.5` ile ColBERT skoru `26.4`) mutlak değerleriyle toplamak yanlış sonuç vereceğinden **RRF Algoritması** devreye girer:
+Farklı skor skalalarını mutlak değerleriyle toplamak yanlış sonuç vereceğinden **RRF Algoritması** devreye girer:
 
 $$RRF(d) = \frac{w_{BM25}}{k + rank_{BM25}(d)} + \frac{w_{SEM}}{k + rank_{SEM}(d)}$$
 
@@ -299,15 +233,15 @@ $$RRF(d) = \frac{w_{BM25}}{k + rank_{BM25}(d)} + \frac{w_{SEM}}{k + rank_{SEM}(d
 
 ---
 
-### ADIM 7: İkinci Aşama — Hugging Face TEI Cross-Encoder Reranker
+### ADIM 7: İkinci Aşama — Cross-Encoder Reranker
 
-Birinci aşama sonucunda belirlenen en iyi adaylar, derin anlamsal doğrulama için ikinci aşama nöral yeniden sıralayıcıya (`TeiRerankingService.java` -> Hugging Face TEI / `BAAI/bge-reranker-v2-m3`) girer.
+Birinci aşama sonucunda belirlenen en iyi adaylar, derin anlamsal doğrulama için ikinci aşama nöral yeniden sıralayıcıya (`TeiRerankingService.java` -> Hugging Face TEI / `BAAI/bge-reranker-v2-m3` veya saf Java yedek motoru) girer.
 
 1. **Tam Çapraz Dikkat (Full Cross-Attention Mekanizması):**
    * Tekil (bi-encoder) vektörlerin aksine, `(Sorgu, Döküman Metni)` çifti modele birlikte verilir ve her bir sorgu token'ı dökümanın her bir kelimesiyle doğrudan çapraz dikkat kurar.
    * Kelimelerin bağlamsal sırası, olumsuzluk ekleri (`"bulunamadı"`, `"sağ kurtarıldı"`), unvan ve birim eşleşmeleri nöral ağırlıklarla değerlendirilir.
 2. **Nöral Puanlama:** Model her çift için sigmoid/softmax ile 0.0000 ile 1.0000 arasında saf bir `relevanceScore` üretir.
-   * Anlamsız/gibberish sorgularda (`"kmndjkgfhdkjhdıfug"` gibi) model `~0.00` üretirken, semantik olarak örtüşen dökümanlar `0.90+` alarak en üste taşınır.
+   * Anlamsız/gibberish sorgularda model `~0.00` üretirken, semantik olarak örtüşen dökümanlar `0.90+` alarak en üste taşınır.
 3. **Sıralama Değişimi (Rank Delta):**
    * İlk aşamada geri sıralarda kalan bir olay, Cross-Encoder analizinde sorguyla birebir anlamsal uyum sağlarsa ilk sıraya yükselebilir ($\Delta = +4$).
 
@@ -321,7 +255,7 @@ Arama tamamlandığında `SearchQueryLogService.java` devreye girer:
 * **Sequence:** `search_query_log_seq`
 * **Kaydedilen Veriler:**
   * Kullanıcı sorgusu (`"İstanbul boğazı şüpheli gemi"`)
-  * Arama tipi (`HYBRID`), Semantik Mod (`COLBERT`)
+  * Arama tipi (`HYBRID`)
   * Toplam geçen süre (`tookMs`)
   * Kullanılan ağırlıklar (`bm25Weight: 0.5`, `semanticWeight: 0.5`)
   * Aday limiti (`30`), RRF sabiti (`60`), dönen sonuç sayısı (`10`)
@@ -366,17 +300,13 @@ Spring Boot, `HybridExplainResponse` nesnesini JSON olarak serialize eder ve HTT
     ]
   },
   "semanticStage": {
-    "stageName": "COLBERT",
+    "stageName": "SEMANTIC",
     "tookMs": 4,
     "results": [
       {
         "rank": 1,
-        "originalScore": 24.51,
-        "document": { "id": "6d439641-..." },
-        "tokenMatches": [
-          { "queryToken": "şüpheli", "documentToken": "şüpheli", "similarity": 1.0 },
-          { "queryToken": "gemi", "documentToken": "fırkateyn", "similarity": 0.78 }
-        ]
+        "originalScore": 0.8912,
+        "document": { "id": "6d439641-..." }
       }
     ]
   },
@@ -407,23 +337,20 @@ Spring Boot, `HybridExplainResponse` nesnesini JSON olarak serialize eder ve HTT
 
 #### Frontend'deki 4 Sütunlu Görsel Çıktı:
 React arayüzü (`frontend/src/App.tsx`) bu zengin JSON verisini alır ve ekranda 4 ayrı sütun halinde gösterir:
-1. **Sütun 1 (Mavi):** 📄 **BM25 Adayları** (Eşleşen kelime vurguları ve TF-IDF skorları).
-2. **Sütun 2 (Mor):** ⚡ **ColBERT Adayları** (Kelime-kelime token eşleşmeleri ve benzerlik yüzdeleri).
-3. **Sütun 3 (Yeşil):** 🔀 **RRF Birleşik Sıralama** (BM25 ve Vektör motorlarının katkı çubukları).
-4. **Sütun 4 (Kehribar):** 🎯 **Cross-Encoder Yeniden Sıralama** (Sıralama değişim rozetleri: `▲ +2`, `▼ -1`).
+1. **Sütun 1 (Mavi / Turuncu):** 📄 **BM25 Adayları** (Eşleşen kelime vurguları ve TF-IDF skorları).
+2. **Sütun 2 (Sarı):** 🧠 **Semantik Adayları** (BGE-M3 1024-boyutlu HNSW vektör benzerliği).
+3. **Sütun 3 (Turuncu):** 🔀 **RRF Birleşik Sıralama** (BM25 ve Vektör motorlarının katkı çubukları).
+4. **Sütun 4 (Koyu Kehribar):** 🎯 **Cross-Encoder Yeniden Sıralama** (Sıralama değişim rozetleri: `▲ +2`, `▼ -1`).
 
 Her bir olayın üzerine tıklandığında açılır panel ile dökümanın tam harekat raporu (`longText`), koordinatları ve bağlı birliği görüntülenebilir.
 
 ---
 
-## 📌 Özet Karşılaştırma Tablosu
+## 📌 Arama Motoru Karşılaştırması
 
-| Aşama / Özellik | ColBERT (Late Interaction BERT) | Düz Semantik (Dense BGE-M3) |
-| :--- | :--- | :--- |
-| **Vektör Tipi** | Çoklu Vektör ($L_q \times 128$-boyut) | Tekil Vektör ($1 \times 1024$-boyut) |
-| **Vektör Üreticisi** | `JavaColbertEngine` (Saf Java, 0.5 ms) | Ollama API (`bge-m3`) veya Mock |
-| **Vektör Veritabanı**| **Qdrant Multi-Vector DB** (Port 6333) | **OpenSearch kNN Index** (Port 9200) |
-| **Benzerlik Algoritması**| Donanım Hızlandırmalı **MaxSim** | Kosinüs Mesafesi (**Cosine Similarity**) |
-| **Metin Hidrasyonu**| Qdrant ID'leri $\rightarrow$ OpenSearch `ids` Query | Doğrudan OpenSearch `_source` |
-| **Açıklanabilirlik** | **Var:** Kelime seviyesinde eşleşme yüzdeleri | **Yok:** Soyut genel benzerlik puanı |
-| **Kullanım Amacı** | Kritik taktik arama, ince detay yakalama | Genel konu/tema benzerliği |
+| Aşama / Özellik | Kelime Araması (BM25) | Yoğun Vektör Araması (Dense BGE-M3) | Çapraz Kodlayıcı (Cross-Encoder) |
+| :--- | :--- | :--- | :--- |
+| **Yöntem** | Lucene Okapi BM25 | 1024-Boyutlu k-NN HNSW | BAAI/bge-reranker-v2-m3 |
+| **Motor** | OpenSearch 3.8.0 | OpenSearch 3.8.0 k-NN eklentisi | Hugging Face TEI / Dahili Reranker |
+| **Metrik** | TF-IDF / Term Frequency | Kosinüs Benzerliği | Çapraz Dikkat Alaka Skoru (0-1) |
+| **Kullanım Amacı** | Kesin kelime, kod, unvan eşleşmesi | Eş anlamlı kelimeler, kavramsal benzerlik | Kesin bağlamsal sıralama ve sahte eşleşme eleme |

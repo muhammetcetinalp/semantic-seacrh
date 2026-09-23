@@ -43,8 +43,6 @@
   --bm25-glow:      rgba(251, 146, 60, 0.12);
   --sem-color:      #f59e0b;
   --sem-glow:       rgba(245, 158, 11, 0.12);
-  --colbert-color:  #ff7849;
-  --colbert-glow:   rgba(255, 120, 73, 0.12);
   --rrf-color:      #f97316;
   --rrf-glow:       rgba(249, 115, 22, 0.14);
   --rerank-color:   #ea580c;
@@ -264,7 +262,6 @@ body {
 .diagnostic-indicator.both    { background: #f97316; }
 .diagnostic-indicator.bm25    { background: var(--bm25-color); }
 .diagnostic-indicator.sem     { background: var(--sem-color); }
-.diagnostic-indicator.colbert { background: var(--colbert-color); }
 .diagnostic-indicator.rerank  { background: var(--rerank-color); }
 
 .diagnostic-info { display: flex; flex-direction: column; min-width: 0; justify-content: center; }
@@ -1343,12 +1340,6 @@ input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   border: 1px solid rgba(245, 158, 11, 0.45);
 }
 
-.mode-btn.active.colbert {
-  background: rgba(255, 120, 73, 0.16);
-  color: #ff8c66;
-  border: 1px solid rgba(255, 120, 73, 0.45);
-}
-
 .mode-btn.active.norm {
   background: rgba(251, 146, 60, 0.16);
   color: #fed7aa;
@@ -1379,60 +1370,6 @@ input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
   border: 1px solid rgba(251, 146, 60, 0.45);
 }
 
-/* ── ColBERT Card & Badges ──────────────────────────── */
-.stage-card.colbert { border-top: 3px solid var(--colbert-color); }
-.stage-badge.colbert {
-  background: var(--colbert-glow);
-  color: var(--colbert-color);
-  border: 1px solid rgba(255, 120, 73, 0.35);
-}
-.algo-info.colbert { border-left: 3px solid var(--colbert-color); }
-.rank-number.colbert { color: var(--colbert-color); }
-.score-badge.colbert {
-  background: rgba(255, 120, 73, 0.14);
-  color: var(--colbert-color);
-  border: 1px solid rgba(255, 120, 73, 0.30);
-}
-.score-bar-fill.colbert {
-  background: linear-gradient(90deg, #c2410c, var(--colbert-color));
-}
-
-/* ── MaxSim Token Matches ───────────────────────────── */
-.maxsim-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.maxsim-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.maxsim-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: rgba(255, 120, 73, 0.10);
-  border: 1px solid rgba(255, 120, 73, 0.28);
-  color: #fed7aa;
-}
-
-.maxsim-arrow {
-  color: var(--text-muted);
-  font-size: 9px;
-}
-
-.maxsim-score {
-  font-weight: 700;
-  color: #fb923c;
-}
 
 /* ── Incident / Tactical Metadata Badges ────────────── */
 .incident-header-meta {

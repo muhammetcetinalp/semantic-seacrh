@@ -1,0 +1,28 @@
+# ==============================================================================
+# OpenSearch 3.8.0 - Semantic Search Airgap & Windows Hazır Konfigürasyon Dosyası
+# Bu dosyayı OpenSearch dizinindeki config/opensearch.yml içerisine kopyalayabilirsiniz.
+# ==============================================================================
+
+# 1. Küme ve Düğüm İsimleri
+cluster.name: semantic-search-cluster
+node.name: node-1
+
+# 2. Tek Düğümlü Airgap Modu (Tek makinede cluster arama hatalarını engeller)
+discovery.type: single-node
+
+# 3. Ağ Ayarları (Tüm arayüzleri dinle; hem yerel hem de LAN'dan erişim sağlar)
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# 4. Güvenlik Eklentisini Kapatma (Airgap HTTP Şifresiz / Hızlı Mod)
+# Bu satır SSL, HTTPS sertifikaları ve admin şifresi engellerini devre dışı bırakır.
+plugins.security.disabled: true
+
+# 5. k-NN Vektör Arama Ayarları (BGE-M3 1024-dim HNSW ve FAISS motoru için)
+knn.algo_param.index_thread_qty: 2
+knn.memory.circuit_breaker.limit: "60%"
+
+# 6. Dizin Yolları (İsteğe bağlı: OpenSearch dizininize göre uyarlayabilirsiniz)
+# path.data: C:\opensearch-3.8.0\data
+# path.logs: C:\opensearch-3.8.0\logs

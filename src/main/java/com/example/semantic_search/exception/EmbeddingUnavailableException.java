@@ -1,7 +1,7 @@
 package com.example.semantic_search.exception;
 
 /**
- * Metin gömme (embedding) servis sağlayıcısına (TEI / HuggingFace / Ollama vb.)
+ * Metin gömme (embedding) servis sağlayıcısına (TEI / HuggingFace / Harici Model API vb.)
  * erişilemediğinde, zaman aşımı (timeout) meydana geldiğinde veya servis hata verdiğinde fırlatılan istisna.
  *
  * <p>REST API katmanında HTTP 503 (Service Unavailable) durum koduyla karşılanır.</p>

@@ -54,9 +54,7 @@ class SearchQueryServiceTest {
 
         searchQueryService = new SearchQueryService(
                 openSearchAdapter, embeddingProvider, searchProperties,
-                searchQueryLogService, java.util.Optional.empty(),
-                java.util.Optional.empty(), java.util.Optional.empty(),
-                java.util.Optional.empty());
+                searchQueryLogService, java.util.Optional.empty());
     }
 
     @Test

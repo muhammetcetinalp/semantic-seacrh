@@ -3,10 +3,8 @@ package com.example.semantic_search.service;
 import com.example.semantic_search.client.embedding.EmbeddingProvider;
 import com.example.semantic_search.client.opensearch.OpenSearchAdapter;
 import com.example.semantic_search.client.opensearch.OpenSearchDocumentSourceMapper;
-import com.example.semantic_search.client.qdrant.QdrantAdapter;
 import com.example.semantic_search.model.IndexingState;
 import com.example.semantic_search.model.IndexingStatus;
-import com.example.semantic_search.model.QdrantPoint;
 import com.example.semantic_search.model.SearchDocument;
 import com.example.semantic_search.repository.IndexingStateRepository;
 import org.slf4j.Logger;
@@ -26,9 +24,8 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * {@code olaylar.json} veri dosyasını okuyarak olay kayıtlarını OpenSearch'e,
- * PostgreSQL indeksleme durum tablosuna ve Qdrant çoklu-vektör koleksiyonuna
- * toplu olarak aktaran içe alma (ingestion / ETL) servisi.
+ * {@code olaylar.json} veri dosyasını okuyarak olay kayıtlarını OpenSearch'e
+ * ve PostgreSQL indeksleme durum tablosuna toplu olarak aktaran içe alma (ingestion / ETL) servisi.
  */
 @Service
 public class OlaylarIngestionService {
@@ -36,8 +33,6 @@ public class OlaylarIngestionService {
     private static final Logger log = LoggerFactory.getLogger(OlaylarIngestionService.class);
 
     private final OpenSearchAdapter openSearchAdapter;
-    private final ColbertService colbertService;
-    private final QdrantAdapter qdrantAdapter;
     private final EmbeddingProvider embeddingProvider;
     private final ObjectMapper objectMapper;
     private final IndexingStateRepository indexingStateRepository;
@@ -50,23 +45,17 @@ public class OlaylarIngestionService {
      * OlaylarIngestionService bileşenini yapılandıran yapıcı metot.
      *
      * @param openSearchAdapter OpenSearch istemci adaptörü
-     * @param colbertService ColBERT servisi
-     * @param qdrantAdapter Qdrant adaptörü
      * @param embeddingProvider Vektör sağlayıcı
      * @param objectMapper Jackson JSON dönüştürücü
      * @param indexingStateRepository İndeksleme durum tablosu deposu
      * @param documentSourceMapper Doküman kaynak dönüştürücüsü
      */
     public OlaylarIngestionService(OpenSearchAdapter openSearchAdapter,
-                                   ColbertService colbertService,
-                                   QdrantAdapter qdrantAdapter,
                                    EmbeddingProvider embeddingProvider,
                                    ObjectMapper objectMapper,
                                    IndexingStateRepository indexingStateRepository,
                                    OpenSearchDocumentSourceMapper documentSourceMapper) {
         this.openSearchAdapter = openSearchAdapter;
-        this.colbertService = colbertService;
-        this.qdrantAdapter = qdrantAdapter;
         this.embeddingProvider = embeddingProvider;
         this.objectMapper = objectMapper;
         this.indexingStateRepository = indexingStateRepository;
@@ -144,7 +133,7 @@ public class OlaylarIngestionService {
     }
 
     /**
-     * {@code olaylar.json} dosyasındaki verileri OpenSearch, PostgreSQL ve Qdrant'a aktaran ana metot.
+     * {@code olaylar.json} dosyasındaki verileri OpenSearch ve PostgreSQL'e aktaran ana metot.
      *
      * @param limit Aktarılacak kayıt sayısı limiti
      * @param enableDenseEmbedding Dense embedding üretimi bayrağı
@@ -169,7 +158,6 @@ public class OlaylarIngestionService {
         int batchSize = 100;
 
         List<SearchDocument> osBatch = new ArrayList<>(batchSize);
-        List<QdrantPoint> qdrantBatch = new ArrayList<>(batchSize);
 
         try (InputStream is = new FileInputStream(file)) {
             JsonNode root = objectMapper.readTree(is);
@@ -178,7 +166,7 @@ public class OlaylarIngestionService {
             }
 
             int targetLimit = (limit > 0) ? Math.min(limit, root.size()) : root.size();
-            log.info("{} adet olayın OpenSearch '{}' indeksi ve Qdrant'a aktarımı başlatılıyor (recreate={})...",
+            log.info("{} adet olayın OpenSearch '{}' indeksine aktarımı başlatılıyor (recreate={})...",
                     targetLimit, indexName, recreateIndex);
 
             for (int i = 0; i < targetLimit; i++) {
@@ -240,30 +228,9 @@ public class OlaylarIngestionService {
 
                 osBatch.add(doc);
 
-                // Qdrant ColBERT noktası hazırla
-                if (colbertService.isAvailable() && qdrantAdapter.isAvailable()) {
-                    List<List<Float>> multiVectors = colbertService.embedDocument(entityId, title, fullSearchText);
-                    if (multiVectors != null && !multiVectors.isEmpty()) {
-                        Map<String, Object> payload = new HashMap<>();
-                        payload.put("title", title);
-                        payload.put("searchText", fullSearchText);
-                        payload.put("shortText", shortText);
-                        payload.put("longText", longText);
-                        payload.put("type", type);
-                        payload.put("birim", birim);
-                        payload.put("adres", adres);
-                        payload.put("tarih", tarih);
-                        qdrantBatch.add(new QdrantPoint(entityId, multiVectors, payload));
-                    }
-                }
-
                 if (osBatch.size() >= batchSize) {
                     openSearchAdapter.bulkIndex(osBatch);
                     saveIndexingState(osBatch, indexName);
-                    if (!qdrantBatch.isEmpty()) {
-                        qdrantAdapter.upsertPoints(qdrantBatch);
-                        qdrantBatch.clear();
-                    }
                     indexedCount += osBatch.size();
                     osBatch.clear();
                     log.info("{} / {} olay aktarıldı ({}ms)...", indexedCount, targetLimit, System.currentTimeMillis() - start);
@@ -274,10 +241,6 @@ public class OlaylarIngestionService {
             if (!osBatch.isEmpty()) {
                 openSearchAdapter.bulkIndex(osBatch);
                 saveIndexingState(osBatch, indexName);
-                if (!qdrantBatch.isEmpty()) {
-                    qdrantAdapter.upsertPoints(qdrantBatch);
-                    qdrantBatch.clear();
-                }
                 indexedCount += osBatch.size();
                 osBatch.clear();
             }

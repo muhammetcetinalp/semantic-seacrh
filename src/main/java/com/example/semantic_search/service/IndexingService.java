@@ -31,7 +31,6 @@ import java.util.*;
  *   <li>Tekil ve toplu doküman indeksleme.</li>
  *   <li>Metin değişmediğinde pahalı embedding üretiminden kaçınmak için SHA-256 hash tabanlı önbellek/değişiklik kontrolü.</li>
  *   <li>İndeksleme durumunu PostgreSQL üzerinde transactional olarak kaydetme.</li>
- *   <li>Varsa Qdrant ColBERT çoklu-vektör koleksiyonuna artımlı senkronizasyon sağlama.</li>
  * </ul>
  * </p>
  */
@@ -45,7 +44,6 @@ public class IndexingService {
     private final IndexingStateRepository indexingStateRepository;
     private final SearchProperties searchProperties;
     private final OpenSearchDocumentSourceMapper documentSourceMapper;
-    private final Optional<ColbertIndexingSyncService> colbertSyncService;
 
     /**
      * IndexingService için tüm bağımlılıkları enjekte eden yapıcı metot.
@@ -55,38 +53,18 @@ public class IndexingService {
      * @param indexingStateRepository İndeksleme durum tablosu JPA deposu
      * @param searchProperties Genel arama ayarları
      * @param documentSourceMapper Doküman kaynak dönüştürücüsü
-     * @param colbertSyncService İsteğe bağlı ColBERT senkronizasyon servisi
      */
     @Autowired
     public IndexingService(OpenSearchAdapter openSearchAdapter,
                            EmbeddingProvider embeddingProvider,
                            IndexingStateRepository indexingStateRepository,
                            SearchProperties searchProperties,
-                           OpenSearchDocumentSourceMapper documentSourceMapper,
-                           Optional<ColbertIndexingSyncService> colbertSyncService) {
+                           OpenSearchDocumentSourceMapper documentSourceMapper) {
         this.openSearchAdapter = openSearchAdapter;
         this.embeddingProvider = embeddingProvider;
         this.indexingStateRepository = indexingStateRepository;
         this.searchProperties = searchProperties;
         this.documentSourceMapper = documentSourceMapper;
-        this.colbertSyncService = colbertSyncService != null ? colbertSyncService : Optional.empty();
-    }
-
-    /**
-     * İsteğe bağlı ColBERT servisi olmadan çalışan alternatif yapıcı metot.
-     *
-     * @param openSearchAdapter OpenSearch istemci adaptörü
-     * @param embeddingProvider Vektör sağlayıcı
-     * @param indexingStateRepository İndeksleme durumu deposu
-     * @param searchProperties Genel arama ayarları
-     * @param documentSourceMapper Doküman kaynak dönüştürücüsü
-     */
-    public IndexingService(OpenSearchAdapter openSearchAdapter,
-                           EmbeddingProvider embeddingProvider,
-                           IndexingStateRepository indexingStateRepository,
-                           SearchProperties searchProperties,
-                           OpenSearchDocumentSourceMapper documentSourceMapper) {
-        this(openSearchAdapter, embeddingProvider, indexingStateRepository, searchProperties, documentSourceMapper, Optional.empty());
     }
 
     /**
@@ -125,24 +103,6 @@ public class IndexingService {
         openSearchAdapter.indexDocument(document);
         saveIndexingState(request.getId(), indexName, request.getSearchText(),
                 IndexingStatus.INDEXED, documentSourceMapper.toJson(document));
-
-        colbertSyncService.ifPresent(sync -> {
-            try {
-                Map<String, Object> payload = new java.util.HashMap<>();
-                if (request.getTitle() != null) payload.put("title", request.getTitle());
-                if (request.getSearchText() != null) payload.put("searchText", request.getSearchText());
-                if (request.getType() != null) payload.put("type", request.getType());
-                if (request.getBirim() != null) payload.put("birim", request.getBirim());
-                if (request.getTarih() != null) payload.put("tarih", request.getTarih());
-                if (request.getAdres() != null) payload.put("adres", request.getAdres());
-                if (request.getKonum() != null) payload.put("konum", request.getKonum());
-                if (request.getShortText() != null) payload.put("shortText", request.getShortText());
-                if (request.getLongText() != null) payload.put("longText", request.getLongText());
-                sync.indexSingleDocument(request.getId(), request.getTitle(), request.getSearchText(), payload);
-            } catch (Exception e) {
-                log.warn("ColBERT artımlı indeksleme atlandı (id={}): {}", request.getId(), e.getMessage());
-            }
-        });
 
         log.info("Doküman indekslendi: {} ({})", request.getId(), indexName);
     }
@@ -201,29 +161,11 @@ public class IndexingService {
         saveIndexingState(documentId, indexName, request.getSearchText(),
                 IndexingStatus.INDEXED, documentSourceMapper.toJson(document));
 
-        colbertSyncService.ifPresent(sync -> {
-            try {
-                Map<String, Object> payload = new java.util.HashMap<>();
-                if (request.getTitle() != null) payload.put("title", request.getTitle());
-                if (request.getSearchText() != null) payload.put("searchText", request.getSearchText());
-                if (request.getType() != null) payload.put("type", request.getType());
-                if (request.getBirim() != null) payload.put("birim", request.getBirim());
-                if (request.getTarih() != null) payload.put("tarih", request.getTarih());
-                if (request.getAdres() != null) payload.put("adres", request.getAdres());
-                if (request.getKonum() != null) payload.put("konum", request.getKonum());
-                if (request.getShortText() != null) payload.put("shortText", request.getShortText());
-                if (request.getLongText() != null) payload.put("longText", request.getLongText());
-                sync.indexSingleDocument(documentId, request.getTitle(), request.getSearchText(), payload);
-            } catch (Exception e) {
-                log.warn("ColBERT güncelleme senkronizasyonu atlandı (id={}): {}", documentId, e.getMessage());
-            }
-        });
-
         log.info("Doküman güncellendi: {} ({})", documentId, indexName);
     }
 
     /**
-     * Dokümanı OpenSearch ve Qdrant'tan siler; PostgreSQL durumunu DELETED olarak günceller.
+     * Dokümanı OpenSearch'ten siler; PostgreSQL durumunu DELETED olarak günceller.
      *
      * @param indexName Hedef indeks adı
      * @param documentId Silinecek doküman ID'si
@@ -233,7 +175,6 @@ public class IndexingService {
         String resolvedIndex = resolveIndexName(indexName);
 
         openSearchAdapter.deleteDocument(resolvedIndex, documentId);
-        colbertSyncService.ifPresent(sync -> sync.deleteSingleDocument(documentId));
 
         indexingStateRepository.findByDocumentIdAndIndexName(documentId, resolvedIndex)
                 .ifPresent(state -> {
@@ -291,26 +232,6 @@ public class IndexingService {
             saveIndexingState(req.getId(), resolveIndexName(req.getIndexName()),
                     req.getSearchText(), IndexingStatus.INDEXED, documentSourceMapper.toJson(document));
         }
-
-        colbertSyncService.ifPresent(sync -> {
-            try {
-                for (IndexDocumentRequest req : requests) {
-                    Map<String, Object> payload = new HashMap<>();
-                    if (req.getTitle() != null) payload.put("title", req.getTitle());
-                    if (req.getSearchText() != null) payload.put("searchText", req.getSearchText());
-                    if (req.getType() != null) payload.put("type", req.getType());
-                    if (req.getBirim() != null) payload.put("birim", req.getBirim());
-                    if (req.getTarih() != null) payload.put("tarih", req.getTarih());
-                    if (req.getAdres() != null) payload.put("adres", req.getAdres());
-                    if (req.getKonum() != null) payload.put("konum", req.getKonum());
-                    if (req.getShortText() != null) payload.put("shortText", req.getShortText());
-                    if (req.getLongText() != null) payload.put("longText", req.getLongText());
-                    sync.indexSingleDocument(req.getId(), req.getTitle(), req.getSearchText(), payload);
-                }
-            } catch (Exception e) {
-                log.warn("Toplu indeksleme sırasında ColBERT senkronizasyonu atlandı: {}", e.getMessage());
-            }
-        });
 
         log.info("{} adet doküman toplu olarak indekslendi", requests.size());
     }

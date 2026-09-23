@@ -30,6 +30,32 @@ public class EmbeddingProperties {
     /** Servis ulaşılamazsa sahte (mock) deterministik vektör üretilip üretilmeyeceği. */
     private boolean mockEnabled = true;
 
+    /** Model sunucusu için API anahtarı (varsa Authorization Bearer veya X-API-Key başlığında gönderilir). */
+    private String apiKey;
+
+    /** API anahtarının gönderileceği HTTP başlığı (varsayılan: Authorization). */
+    private String apiKeyHeader = "Authorization";
+
+    /** @return API anahtarı */
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    /** @param apiKey API anahtarı */
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    /** @return API anahtarı başlığı */
+    public String getApiKeyHeader() {
+        return apiKeyHeader;
+    }
+
+    /** @param apiKeyHeader API anahtarı başlığı */
+    public void setApiKeyHeader(String apiKeyHeader) {
+        this.apiKeyHeader = apiKeyHeader;
+    }
+
     /** @return Sağlayıcı türü */
     public String getProvider() {
         return provider;

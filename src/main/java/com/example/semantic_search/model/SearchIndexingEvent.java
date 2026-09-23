@@ -10,8 +10,8 @@ import tools.jackson.databind.JsonNode;
 /**
  * Kafka üzerinden asenkron veri akışında tüketilen indeksleme olay sözleşmesi (Record).
  *
- * <p>Harici sistemler bu formatta olay üreterek dokümanların otomatik olarak OpenSearch ve
- * Qdrant veritabanlarında oluşturulmasını, güncellenmesini veya silinmesini tetikler.</p>
+ * <p>Harici sistemler bu formatta olay üreterek dokümanların otomatik olarak OpenSearch
+ * indeksinde oluşturulmasını, güncellenmesini veya silinmesini tetikler.</p>
  *
  * @param eventId Olayın benzersiz UUID kimliği (idempotency için)
  * @param eventType Olay türü (örn: CREATED, UPDATED, DELETED)

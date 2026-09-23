@@ -3,7 +3,7 @@ package com.example.semantic_search.client.embedding;
 /**
  * Vektör gömme (embedding) üretim işlemlerini soyutlayan servis sağlayıcı arayüzü.
  *
- * <p>Vektör gömme modelleri arama motorundan (OpenSearch/Qdrant) tamamen bağımsızdır.
+ * <p>Vektör gömme modelleri arama motorundan (OpenSearch) tamamen bağımsızdır.
  * Bu sayede HuggingFace TEI, uzaktan REST modelleri (OpenAI vb.) veya yerel test sağlayıcıları
  * sistem konfigürasyonu üzerinden kesintisiz bir şekilde değiştirilebilir.</p>
  */

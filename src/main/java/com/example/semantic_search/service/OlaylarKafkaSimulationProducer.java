@@ -139,6 +139,7 @@ public class OlaylarKafkaSimulationProducer {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.ACKS_CONFIG, "1");
+        props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, "5000");
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(props);
              InputStream is = new FileInputStream(file)) {
@@ -157,12 +158,17 @@ public class OlaylarKafkaSimulationProducer {
             for (int i = 0; i < total && running.get(); i++) {
                 JsonNode rawDoc = root.get(i);
                 String docId = rawDoc.path("entityId").asText(UUID.randomUUID().toString());
+                String eventType = rawDoc.path("entityType").asText("OLAY");
+                if (eventType == null || eventType.isBlank()) {
+                    eventType = "OLAY";
+                }
+                long version = rawDoc.path("version").asLong(1L);
 
                 ObjectNode envelope = objectMapper.createObjectNode();
                 envelope.put("eventId", UUID.randomUUID().toString());
-                envelope.put("eventType", "IncidentCreated");
+                envelope.put("eventType", eventType);
                 envelope.put("documentId", docId);
-                envelope.put("version", 1L);
+                envelope.put("version", version);
                 envelope.set("data", rawDoc);
 
                 String payload = objectMapper.writeValueAsString(envelope);

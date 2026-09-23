@@ -1,5 +1,6 @@
 package com.example.semantic_search.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.validation.constraints.NotBlank;
 
 import java.util.Map;
@@ -9,8 +10,9 @@ import java.util.Map;
  *
  * <p>Servis katmanı (IndexingService) bu nesneyi bir {@code SearchDocument} modeline dönüştürür,
  * {@code searchText} içeriğinden yapay zeka modelini kullanarak yoğun vektör gömmesini (embedding)
- * oluşturur ve dokümanı OpenSearch ile varsa Qdrant veritabanına kaydeder.</p>
+ * oluşturur ve dokümanı OpenSearch veritabanına kaydeder.</p>
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class IndexDocumentRequest {
 
     /** Dokümanın benzersiz kimliği (ID) - Zorunlu alandır. */

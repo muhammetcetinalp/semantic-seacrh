@@ -5,7 +5,7 @@ package com.example.semantic_search.model;
  *
  * <ul>
  *   <li><b>PENDING:</b> Doküman indeksleme kuyruğuna alındı veya işlem bekliyor.</li>
- *   <li><b>INDEXED:</b> Doküman başarıyla OpenSearch ve Qdrant üzerinde indekslendi.</li>
+ *   <li><b>INDEXED:</b> Doküman başarıyla OpenSearch üzerinde indekslendi.</li>
  *   <li><b>FAILED:</b> İndeksleme veya vektörleme aşamasında hata oluştu.</li>
  *   <li><b>DELETED:</b> Doküman indeksten kaldırıldı.</li>
  * </ul>

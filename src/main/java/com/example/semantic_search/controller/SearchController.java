@@ -18,8 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Aşağıdaki uç noktaları yönetir:
  * <ul>
  *   <li>{@code POST /api/v1/search}: BM25, Vektör (Dense) veya Hibrit arama sorgularını çalıştırır.</li>
- *   <li>{@code POST /api/v1/search/explain}: Çok aşamalı hibrit arama (BM25 + ColBERT/Vektör + Füzyon + Reranker)
- *       analizini ve token seviyesi eşleşme detaylarını döner.</li>
+ *   <li>{@code POST /api/v1/search/explain}: Çok aşamalı hibrit arama (BM25 + Vektör + Füzyon + Reranker)
+ *       analizini ve aşama detaylarını döner.</li>
  * </ul>
  * </p>
  */
@@ -51,7 +51,7 @@ public class SearchController {
     }
 
     /**
-     * Hibrit aramanın her bir aşamasını (BM25 puanları, Semantik/ColBERT benzerlikleri,
+     * Hibrit aramanın her bir aşamasını (BM25 puanları, Semantik Vektör benzerlikleri,
      * RRF/Score füzyonu ve Cross-Encoder yeniden sıralaması) derinlemesine analiz eden açıklama uç noktası.
      *
      * @param request Hibrit analiz parametreleri

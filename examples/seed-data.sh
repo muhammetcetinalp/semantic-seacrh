@@ -67,7 +67,7 @@ HTTP_CODE=$(curl -s -o /tmp/seed_response.json -w "%{http_code}" -X POST "$ENDPO
     "id": "doc-006",
     "type": "product",
     "title": "BGE-M3: Çok Dilli Embedding Modeli",
-    "searchText": "BGE-M3, BAAI tarafından geliştirilen çok dilli ve çok işlevli bir embedding modelidir. 100'\''den fazla dili destekler ve 1024 boyutlu vektörler üretir. Dense, sparse ve colbert retrieval için optimize edilmiştir.",
+    "searchText": "BGE-M3, BAAI tarafından geliştirilen çok dilli ve çok işlevli bir embedding modelidir. 100'\''den fazla dili destekler ve 1024 boyutlu vektörler üretir. Dense ve sparse retrieval için optimize edilmiştir.",
     "structuredFields": {"year": 2024, "modelSize": "large", "dimensions": 1024},
     "metadata": {"provider": "BAAI", "license": "MIT"}
   },

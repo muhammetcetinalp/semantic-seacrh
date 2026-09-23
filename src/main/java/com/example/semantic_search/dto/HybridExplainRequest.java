@@ -10,8 +10,8 @@ import jakarta.validation.constraints.Min;
  * Hibrit arama boru hattı açıklama ve analiz paneli için ayarlanabilir istek DTO'su.
  *
  * <p>Bu sınıf, temel {@link SearchRequest} sınıfını genişleterek hibrit füzyon (RRF),
- * sözcüksel/semantik katsayı ağırlıkları, aday havuzu çarpanı ve anlamsal model modu
- * (Dense veya ColBERT) gibi parametrelerin kullanıcı tarafından dinamik olarak ayarlanabilmesini sağlar.</p>
+ * sözcüksel/semantik katsayı ağırlıkları ve aday havuzu çarpanı
+ * gibi parametrelerin kullanıcı tarafından dinamik olarak ayarlanabilmesini sağlar.</p>
  */
 public class HybridExplainRequest extends SearchRequest {
 
@@ -34,9 +34,6 @@ public class HybridExplainRequest extends SearchRequest {
     @Min(1)
     @Max(10)
     private Integer candidateMultiplier = 3;
-
-    /** Semantik arama modeli modu: DENSE (BGE-M3) veya COLBERT (Token-level MaxSim). */
-    private String semanticMode = "DENSE";
 
     /** Sıralama birleştirme stratejisi: RRF (Reciprocal Rank Fusion) veya SCORE_NORMALIZED. */
     private String fusionMode = "RRF";
@@ -128,24 +125,6 @@ public class HybridExplainRequest extends SearchRequest {
      */
     public void setCandidateMultiplier(Integer candidateMultiplier) {
         this.candidateMultiplier = candidateMultiplier;
-    }
-
-    /**
-     * Seçili semantik modu (DENSE veya COLBERT) döndürür.
-     *
-     * @return Semantik model modu
-     */
-    public String getSemanticMode() {
-        return semanticMode;
-    }
-
-    /**
-     * Semantik modu (DENSE veya COLBERT) belirler.
-     *
-     * @param semanticMode Semantik model modu
-     */
-    public void setSemanticMode(String semanticMode) {
-        this.semanticMode = semanticMode;
     }
 
     /**

@@ -1,7 +1,7 @@
 package com.example.semantic_search.exception;
 
 /**
- * OpenSearch veya Qdrant indekslerinde belirtilen benzersiz kimliğe (ID)
+ * OpenSearch indeksinde belirtilen benzersiz kimliğe (ID)
  * sahip bir doküman bulunamadığında fırlatılan özel istisna sınıfı.
  *
  * <p>Genellikle REST API seviyesinde HTTP 404 (Not Found) durum koduna dönüştürülür.</p>
