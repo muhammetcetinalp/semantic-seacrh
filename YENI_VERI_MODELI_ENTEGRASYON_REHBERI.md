@@ -76,61 +76,15 @@ Yeni veri türünüzün alanları (JSON key'leri) geldiğinde yapacağınız **�
 
 ---
 
-## 3. Adım 2: Veritabanı Katmanı (PostgreSQL 17 & SQL Tasarımı)
+## 3. Adım 2: Veri Depolama Katmanı (Harici DB Yok - %100 NoSQL OpenSearch)
 
-Mevcut sistemde PostgreSQL'de [`indexing_state`](file:///Users/macbookairm1/Desktop/semantic-search/sql/schema-complete.sql#L12) tablosu bulunmaktadır. Bu tablo zaten geneldir (`document_id`, `index_name`, `document_source JSON`). Ancak yeni veri modelinizin kendi operasyonel tablosu olmalıdır.
+Projemiz harici bir ilişkisel veritabanına (PostgreSQL, Oracle vb.) ihtiyaç duymayacak şekilde tasarlanmıştır. **OpenSearch'ün kendisi yüksek dayanıklılığa sahip bir NoSQL Doküman Veritabanıdır (Document Store)**.
 
-### 3.1. Yeni Tablo DDL (Flyway Migration)
-`src/main/resources/db/migration/` altına yeni bir migration dosyası oluşturun (Örn: `V6__create_radar_kayitlari.sql`):
+* **Depolama Yeri:** OpenSearch yerel diski (`opensearch-data` volume veya `/usr/share/opensearch/data`).
+* **Format:** Ham JSON dokümanı + BM25 Ters İndeks (Inverted Index) + 1024 Boyutlu k-NN Vektör İndeksi (FAISS HNSW).
+* **Idempotency & Durum:** Bellek içi (`ConcurrentHashMap`) thread-safe durum deposu (`IndexingStateRepository`).
 
-```sql
--- PostgreSQL 17 Uyumlu DDL
-CREATE SEQUENCE IF NOT EXISTS radar_kayitlari_seq START WITH 1 INCREMENT BY 1;
-
-CREATE TABLE IF NOT EXISTS radar_kayitlari (
-    id                  VARCHAR(128) PRIMARY KEY,       -- İş/Domain ID'si
-    hedef_adi           VARCHAR(255) NOT NULL,
-    hedef_tipi          VARCHAR(50)  NOT NULL,          -- ASKERI_GEMI, TICARI, IHA vb.
-    durum               VARCHAR(50)  NOT NULL,          -- AKTIF, TAKIPTE, KAYIP
-    hiz_knot            NUMERIC(6,2),
-    irtifa_metre        INT,
-    enlem               DOUBLE PRECISION,
-    boylam              DOUBLE PRECISION,
-    tespit_zamani       TIMESTAMPTZ  NOT NULL,
-    rapor_metni         TEXT,
-    ek_ozellikler       JSONB,                          -- Değişken dinamik alanlar
-    created_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-
--- Hızlı filtreleme ve sorgu indeksleri
-CREATE INDEX IF NOT EXISTS idx_radar_hedef_tipi   ON radar_kayitlari (hedef_tipi);
-CREATE INDEX IF NOT EXISTS idx_radar_durum        ON radar_kayitlari (durum);
-CREATE INDEX IF NOT EXISTS idx_radar_tespit_zaman ON radar_kayitlari (tespit_zamani DESC);
-CREATE INDEX IF NOT EXISTS idx_radar_ek_ozellik   ON radar_kayitlari USING GIN (ek_ozellikler);
-```
-
-### 3.2. Idempotent UPSERT SQL Sorgusu
-Kafka'dan aynı mesaj tekrar geldiğinde verinin ezilmemesi veya mükerrer oluşmaması için:
-
-```sql
-INSERT INTO radar_kayitlari (
-    id, hedef_adi, hedef_tipi, durum, hiz_knot, irtifa_metre, enlem, boylam, tespit_zamani, rapor_metni, ek_ozellikler, updated_at
-) VALUES (
-    :id, :hedefAdi, :hedefTipi, :durum, :hizKnot, :irtifaMetre, :enlem, :boylam, :tespitZamani, :raporMetni, :ekOzellikler, NOW()
-)
-ON CONFLICT (id) DO UPDATE SET
-    hedef_adi     = EXCLUDED.hedef_adi,
-    durum         = EXCLUDED.durum,
-    hiz_knot      = EXCLUDED.hiz_knot,
-    irtifa_metre  = EXCLUDED.irtifa_metre,
-    enlem         = EXCLUDED.enlem,
-    boylam        = EXCLUDED.boylam,
-    tespit_zamani = EXCLUDED.tespit_zamani,
-    rapor_metni   = EXCLUDED.rapor_metni,
-    ek_ozellikler = EXCLUDED.ek_ozellikler,
-    updated_at    = NOW();
-```
+Gelen tüm yeni veri modelleri, doğrudan OpenSearch'ün ilgili indeksine (`indexName`) anlık olarak kaydedilir, güncellenir (`UPSERT`) veya silinir (`DELETE`). Ek bir SQL tablosu oluşturmanıza gerek yoktur.
 
 ---
 
@@ -351,13 +305,21 @@ Eğer sonuç kartlarının üzerinde özel alanlar (örn: `Hız: 38 knot`, `İrt
 
 ---
 
-## 9. Adım 8: Demo "Olaylar" Servislerinin Yönetimi (Temizlik & İzolasyon)
+## 9. Adım 8: Veri İçe Aktarım ve Simülasyon Servislerinin Yönetimi (Data Ingestion & Airgap Bulk)
 
-Projede geliştirme aşamasında kullanılan demo bileşenlerin akıbeti:
-1. **`olaylar.json` (16 MB)**: Demo veri dosyasıdır. Airgap ortamda diskte yer kaplamaması için silebilirsiniz (`rm src/main/java/com/example/semantic_search/olaylar.json`).
-2. **`OlaylarIngestionService.java` ve `OlaylarController.java`**: 
-   - İsteğe bağlı olarak bu sınıfları silebilirsiniz ya da yeni verinizi dosya üzerinden toplu yüklemek (batch import) istediğinizde şablon olarak kullanabilirsiniz.
-   - Gerçek ortamda tüm veri akışı Kafka üzerinden asenkron geleceği için bu kontrolcüyü kullanmanıza gerek kalmaz.
+Projedeki sınıflar alana bağımlı (`Olaylar...`) olmaktan çıkarılıp tamamen **jenerik ve esnek** hale getirilmiştir:
+1. **`DataIngestionService.java` ve `DataIngestionController.java`**: 
+   - Yalnızca demo olayları değil; `data.json`, `dataset.json` veya özel dosya yolundaki herhangi bir JSON dizisini okuyabilir.
+   - **Airgap Doğrudan HTTP Bulk:** Airgap sunucunuzdan dosya kopyalamadan doğrudan veritabanı JSON dökümünü POST edebilirsiniz:
+     ```bash
+     curl -X POST "http://localhost:8080/api/v1/data/bulk-json?enableDenseEmbedding=true" \
+       -H "Content-Type: application/json" \
+       -d '[{"id":"doc-1","title":"Radar İzi","content":"Detay..."}]'
+     ```
+   - Hem `/api/v1/data` hem de `/api/v1/olaylar` yolları aktiftir (React arayüzü tam uyumludur).
+2. **`KafkaSimulationProducer.java`**:
+   - Airgap veya test ortamında herhangi bir JSON veri kümesini Kafka topic'lerine streaming akış olarak basabilir.
+3. **`olaylar.json` (16 MB)**: Demo veri dosyasıdır. Airgap ortamda kendi veriniz yüklendikten sonra silinebilir.
 
 ---
 
@@ -418,18 +380,67 @@ curl -X POST http://localhost:8080/api/search/hybrid \
 
 ---
 
-## 11. Adım 10: 10 Adımlık Geliştirici Kontrol Listesi (Checklist)
+## 11. Adım 10: Güncellenmiş Geliştirici Kontrol Listesi (Checklist)
 
 Yeni veri türünüzü projeye eklerken sırasıyla bu listeyi takip edin:
 
 - [ ] **1. Alan Analizi**: Yeni veri alanlarını 4 kategoriye (Search, Embed, Filter, Metadata) ayırın.
-- [ ] **2. PostgreSQL DDL**: `src/main/resources/db/migration/` altına yeni tablonuzu ve indekslerinizi içeren `V..__create_table.sql` scriptini ekleyin.
-- [ ] **3. JPA / Repository**: Yeni tablo için Entity ve Repository sınıflarını oluşturun.
-- [ ] **4. `application.yml` Rotaları**: `search.kafka.routes` altına yeni olay adlarını (`[YENI_CREATED]`) ve hedef indeks adını yazın.
-- [ ] **5. Topic Tanımı**: `.env` içindeki `SEARCH_KAFKA_TOPICS` değerine yeni Kafka topic adını ekleyin.
-- [ ] **6. JSON Mapper**: [`JsonSearchEventMapper.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java) içine girip gelen JSON'dan alanları okuyun ve semantik `searchText` türetme kuralını yazın.
-- [ ] **7. OpenSearch Mapping**: [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java) içinde `createIndexIfNotExists` metoduna yeni alan tiplerini (`text`, `keyword`, `date`, `geo_point`) ekleyin.
-- [ ] **8. BM25 Query Fields**: [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java) içinde `buildBm25QueryWithFilters` metodunda ağırlıklı aranacak alanları belirleyin (`fields("baslik^3.0", ...)`).
-- [ ] **9. Dinamik Filtreler**: [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java) içinde `addFilters` metoduna yeni alan filtrelerinizi ekleyin.
-- [ ] **10. Derleme ve Test**: Terminalde `./mvnw clean compile` çalıştırıp hatasız derlendiğini teyit edin.
+- [ ] **2. Kafka Topic Tanımı**: `.env` içindeki `SEARCH_KAFKA_TOPICS` değerine yeni Kafka topic adını ekleyin (örn: `SEARCH_KAFKA_TOPICS=mevcut-topic,yeni-topic`).
+- [ ] **3. `application.yml` Rotaları (İsteğe Bağlı)**: Yeni olay tiplerinizi ve hedef indeks adını `search.kafka.routes` altına ekleyin (veya varsayılan indekse bırakın).
+- [ ] **4. Alan Eşlemesi (Mapper)**: [`JsonSearchEventMapper.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java) zaten tüm ekstra alanları otomatik `structuredFields` haritasına alır. Özel bir birleştirme gerekiyorsa `searchText` bloğunu düzenleyin.
+- [ ] **5. BM25 Boost Ayarı (İsteğe Bağlı)**: [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java#L704) içindeki `fields("title^3.0", ...)` satırına yeni arama alanınızı ekleyin.
+- [ ] **6. Derleme ve Başlatma**: Terminalde `./mvnw clean compile` ve ardından `./mvnw spring-boot:run` çalıştırın.
+
+---
+
+## 12. Geliştirici Başvuru Rehberi ve Sıkça Sorulan Sorular (Cookbook)
+
+### 📌 S1: Hangi field'ları nasıl search alanı diye seçebilirim ve bu field'lar BM25'te nasıl kullanılır?
+* **Search Alanı Nedir?** Kullanıcının serbest metin olarak (kelime aratarak, yazım hatalarıyla, ek alarak) arayacağı alanlardır (örn: `title`, `content`, `summary`, `aciklama`, `rapor_metni`).
+* **Nerede Tanımlanır?** [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java#L126-L150) içindeki `createIndexIfNotExists` mapping bloğunda `type: text` ve `.analyzer("turkish_search")` olarak tanımlanır.
+* **BM25'te Nasıl Kullanılır?** [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java#L701-L708) içindeki `buildBm25QueryWithFilters` metodu bu alanları `multiMatch` sorgusuyla tarar.
+
+### 📌 S2: Turkish Analyzer nasıl çalışır ve nerede kullanılır?
+* **Bileşenleri:** [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java#L107-L125) içinde `turkish_search` özel analizörüdür:
+  1. `tokenizer("standard")`: Cümleyi kelimelere böler.
+  2. `filter("apostrophe")`: Kesme işaretlerini ve ekleri ayırır ("Ankara'da" ➔ "Ankara").
+  3. `filter("lowercase")`: Türkçe İ/ı, I/i harf uyumlu küçük harfe çevirir.
+  4. `filter("turkish_keywords")`: `turkey_locations.json` dosyasındaki 973 il ve ilçeyi kök bulucudan korur (Örn: "Van", "Bolu" gibi yer adlarının kökleri fiil sanılarak bozulmaz).
+  5. `filter("turkish_stop")`: Türkçe bağlaç ve dolgu kelimeleri ("ve", "ile", "de", "bir") eler.
+  6. `filter("turkish_stemmer")`: Türkçe çekim eklerini soyarak kelime kökünü bulur ("gemilerimizden" ➔ "gemi").
+* **Kullanımı:** Mapping tanımlarken arama yapılacak her `text` alanına `.analyzer("turkish_search")` dediğiniz anda OpenSearch hem doküman indekslenirken hem de kullanıcı arama yaparken bu filtre zincirini otomatik olarak uygular.
+
+### 📌 S3: Hangilerini metadata olarak seçebilirim ve bu field'lar nasıl metadata olur?
+* **Metadata / Filtre Alanları Nelerdir?** Metin analizi gerektirmeyen, birebir eşleşme (exact match), sayısal filtre veya tarih aralığı kontrolünde kullanılacak alanlardır (örn: `durum`, `oncelik`, `hiz_knot`, `irtifa`, `tarih`, `konum`).
+* **Nasıl Metadata Olur?**
+  1. **Otomatik Toplama:** [`JsonSearchEventMapper.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java#L116-L132) Kafka'dan gelen JSON'daki temel alanlar dışındaki tüm özel alanları dinamik olarak `structuredFields` haritasına koyar.
+  2. **OpenSearch'e Aktarım:** [`OpenSearchDocumentSourceMapper.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchDocumentSourceMapper.java#L70) bu haritayı `source.putAll(document.getStructuredFields())` ile OpenSearch dokümanına doğrudan ekler. OpenSearch'ün `dynamic: true` mapping özelliği sayesinde tüm bu alanlar otomatik filtrelenebilir `keyword` veya `number` olur.
+  3. **Filtre Olarak Kullanım:** Kullanıcı arama yaparken `SearchRequest` içine `"filters": {"durum": "AKTIF", "hedef_tipi": "BOT"}` yazarak bu alanlara göre filtreleme yapar.
+
+### 📌 S4: BM25 için katsayılar (Boost / Ağırlık) nasıl ve nerede verilir?
+* **Nerede Verilir?** [`OpenSearchAdapter.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java#L704) içindeki `buildBm25QueryWithFilters` metodunda:
+  ```java
+  .fields("title^3.0", "shortText^2.0", "longText^2.0", "birim^2.0", "adres^2.0")
+  ```
+* **Katsayı Mantığı (`^X.X`):**
+  * `title^3.0`: Başlıkta geçen kelimeler arama puanına **3 kat** daha fazla etki eder.
+  * `shortText^2.0`: Özet metninde geçen kelimeler **2 kat** etki eder.
+  * `longText^1.0` (veya katsayısız): Standart ağırlıktır.
+  * İleride yeni bir alan eklediğinizde (örn: `hedef_adi^4.0`) bu listeye ekleyerek o alanın ağırlığını belirleyebilirsiniz.
+
+### 📌 S5: Hangi field'lar embedlenecek ve nerede seçilecek?
+* **Nerede Seçilir?** [`JsonSearchEventMapper.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java#L134-L155) içindeki `searchText` oluşturma bloğunda belirlenir.
+* **Mantık:** BGE-M3 modeline tek bir metin bloğu (`request.getSearchText()`) gönderilir:
+  * Sistem varsayılan olarak `title` + `shortText` + `longText` + `content`/`text`/`detay` alanlarını anlamlı bir metin halinde birleştirir.
+  * İsterseniz Kafka mesajınızda doğrudan hazır bir `searchText` alanı gönderebilirsiniz; sistem varsa doğrudan onu kullanır.
+  * Üretilen bu metin [`IndexingService.java`](file:///Users/macbookairm1/Desktop/semantic-search/src/main/java/com/example/semantic_search/service/IndexingService.java#L80) tarafından model sunucusuna gönderilir ve 1024 boyutlu `float[]` vektörü üretilip OpenSearch `embedding` alanına yazılır.
+
+### 📌 S6: Birden fazla topic'ten veri akarken ne yapmalıyım?
+* Tek yapmanız gereken `.env` dosyasında:
+  ```properties
+  SEARCH_KAFKA_TOPICS=radar-events,istihbarat-events,personel-events
+  SEARCH_KAFKA_CONCURRENCY=3
+  ```
+  yazmaktır. Kodumuzdaki `@KafkaListener` bu topic'lerin hepsine otomatik abone olur. Kafka her topic için ayrı kitap ayracı (offset) tutar.
+
 

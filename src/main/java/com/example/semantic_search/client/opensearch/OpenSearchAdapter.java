@@ -345,6 +345,21 @@ public class OpenSearchAdapter {
         }
     }
 
+    /**
+     * İndeksteki toplam doküman adedini döner (Oracle ve harici sistemlerle tutarlılık kontrolü için).
+     *
+     * @param indexName Hedef indeks adı
+     * @return Toplam doküman sayısı
+     */
+    public long countDocuments(String indexName) {
+        try {
+            return client.count(c -> c.index(indexName)).count();
+        } catch (Exception e) {
+            log.warn("İndeks '{}' doküman sayısı alınamadı: {}", indexName, e.getMessage());
+            return 0;
+        }
+    }
+
     // ---- Arama Operasyonları ----
 
     /**

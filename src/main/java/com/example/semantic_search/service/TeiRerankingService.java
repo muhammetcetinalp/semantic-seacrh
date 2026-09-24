@@ -4,6 +4,7 @@ import com.example.semantic_search.dto.HybridExplainResponse;
 import com.example.semantic_search.dto.SearchResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
@@ -43,6 +44,7 @@ public class TeiRerankingService implements RerankingService {
         this(restClientBuilder, endpoint, model, null, "Authorization");
     }
 
+    @Autowired
     public TeiRerankingService(
             RestClient.Builder restClientBuilder,
             @Value("${search.reranking.endpoint:http://localhost:8082}") String endpoint,

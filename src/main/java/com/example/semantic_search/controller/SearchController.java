@@ -5,12 +5,11 @@ import com.example.semantic_search.dto.HybridExplainResponse;
 import com.example.semantic_search.dto.SearchRequest;
 import com.example.semantic_search.dto.SearchResponse;
 import com.example.semantic_search.service.SearchQueryService;
+import com.example.semantic_search.model.SearchType;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 /**
  * Arama motoru API uç noktalarını (endpoints) sunan REST denetleyicisi.
@@ -18,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Aşağıdaki uç noktaları yönetir:
  * <ul>
  *   <li>{@code POST /api/v1/search}: BM25, Vektör (Dense) veya Hibrit arama sorgularını çalıştırır.</li>
+ *   <li>{@code GET /api/v1/search}: Basit arama sorgularını query parametreleri ile çalıştırır.</li>
  *   <li>{@code POST /api/v1/search/explain}: Çok aşamalı hibrit arama (BM25 + Vektör + Füzyon + Reranker)
  *       analizini ve aşama detaylarını döner.</li>
  * </ul>
@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/v1/search")
+@CrossOrigin
 public class SearchController {
 
     private final SearchQueryService searchQueryService;
@@ -34,12 +35,13 @@ public class SearchController {
      *
      * @param searchQueryService Arama sorgulama iş mantığı servisi
      */
+    @Autowired
     public SearchController(SearchQueryService searchQueryService) {
         this.searchQueryService = searchQueryService;
     }
 
     /**
-     * Standart arama sorgusunu çalıştırır.
+     * Standart arama sorgusunu POST gövdesi ile çalıştırır.
      *
      * @param request Arama kriterlerini, filtreleri ve sayfalama parametrelerini içeren DTO
      * @return Eşleşen dokümanlar ve yürütme metriklerini içeren HTTP 200 yanıtı
@@ -48,6 +50,32 @@ public class SearchController {
     public ResponseEntity<SearchResponse> search(@Valid @RequestBody SearchRequest request) {
         SearchResponse response = searchQueryService.search(request);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Basit arama sorgusunu GET parametreleri ile çalıştırır.
+     *
+     * @param query Arama sorgusu
+     * @param indexName İndeks adı (opsiyonel)
+     * @param searchType Arama türü (opsiyonel: BM25, SEMANTIC, HYBRID)
+     * @param limit Sonuç limiti (varsayılan: 10)
+     * @param offset Sayfalama başlangıcı (varsayılan: 0)
+     * @return Arama sonuçları
+     */
+    @GetMapping
+    public ResponseEntity<SearchResponse> searchGet(
+            @RequestParam String query,
+            @RequestParam(required = false) String indexName,
+            @RequestParam(required = false) SearchType searchType,
+            @RequestParam(required = false, defaultValue = "10") Integer limit,
+            @RequestParam(required = false, defaultValue = "0") Integer offset) {
+        SearchRequest request = new SearchRequest();
+        request.setQuery(query);
+        request.setIndexName(indexName);
+        request.setSearchType(searchType);
+        request.setLimit(limit);
+        request.setOffset(offset);
+        return ResponseEntity.ok(searchQueryService.search(request));
     }
 
     /**

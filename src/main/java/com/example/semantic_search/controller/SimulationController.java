@@ -1,7 +1,8 @@
 package com.example.semantic_search.controller;
 
 import com.example.semantic_search.repository.IndexingStateRepository;
-import com.example.semantic_search.service.OlaylarKafkaSimulationProducer;
+import com.example.semantic_search.service.KafkaSimulationProducer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +14,10 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/v1/simulation/kafka")
+@CrossOrigin
 public class SimulationController {
 
-    private final OlaylarKafkaSimulationProducer producer;
+    private final KafkaSimulationProducer producer;
     private final IndexingStateRepository indexingStateRepository;
 
     /**
@@ -24,8 +26,9 @@ public class SimulationController {
      * @param producer Kafka olay simülasyon üreticisi
      * @param indexingStateRepository Veritabanı durum tablosu deposu
      */
+    @Autowired
     public SimulationController(
-            OlaylarKafkaSimulationProducer producer,
+            KafkaSimulationProducer producer,
             IndexingStateRepository indexingStateRepository) {
         this.producer = producer;
         this.indexingStateRepository = indexingStateRepository;

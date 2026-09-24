@@ -1,7 +1,10 @@
 package com.example.semantic_search.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -36,9 +39,9 @@ public class WebConfiguration implements WebMvcConfigurer {
     /**
      * Model istemcileri (Embedding & Reranker) için standart RestClient.Builder bileşeni.
      */
-    @org.springframework.context.annotation.Bean
-    @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
-    public org.springframework.web.client.RestClient.Builder restClientBuilder() {
-        return org.springframework.web.client.RestClient.builder();
+    @Bean
+    @ConditionalOnMissingBean
+    public RestClient.Builder restClientBuilder() {
+        return RestClient.builder();
     }
 }

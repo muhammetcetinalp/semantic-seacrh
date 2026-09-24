@@ -38,10 +38,10 @@ Bu kılavuz; **kapalı devre (airgap / internetsiz) kurumsal ağda**, **Kubernet
 │ WINDOWS MAKİNE (Semantic Search Spring Boot Uygulaması)                          │
 │                                                                                  │
 │  1. KafkaIndexingListener: Mesajı kuyruktan çeker (Consumer Group)               │
-│  2. JsonSearchEventMapper: JSON'ı SearchIndexingEvent nesnesine çevirir          │
-│  3. SearchEventProcessor: PostgreSQL'de versiyon kontrolü yapar (Idempotency)    │
-│  4. IndexingService: OpenSearch'e (vektör + BM25) dökümanı indeksler             │
-│  5. Offset Commit: Başarıyla işlenen mesaj Kafka'da onaylanır                    │
+│  2. JsonSearchEventMapper: JSON'ı ayrıştırır (zarflı veya düz JSON destekler)    │
+│  3. SearchEventProcessor: Bellek içi versiyon kontrolü yapar (Idempotency)       │
+│  4. IndexingService: Doğrudan OpenSearch'e (vektör + BM25) indeksler (DB Yok)    │
+│  5. Offset Commit: Başarıyla işlenen mesaj Kafka'da onaylanır (AckMode.RECORD)   │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -241,15 +241,16 @@ INFO  --- [search-indexer-0-C-1] c.e.s.service.IndexingService      : Doküman O
 
 ---
 
-## 9. Dağıtık Idempotency (Çift Kayıt ve Sırasız Veri Koruması)
+## 9. Dağıtık Idempotency (Çift Kayıt ve Sırasız Veri Koruması - Veritabanı Gerektirmez)
 
 Airgap ağdaki K8s üreticileri bazen ağ kesilmeleri nedeniyle aynı mesajı 2 kere basabilir (At-least-once) veya 3. sürüm, 2. sürümden önce gelebilir:
 
-1. **`SELECT FOR UPDATE` Kilidi**: Mesaj geldiğinde PostgreSQL `indexing_state` tablosunda o dökümanın satırı kilitlenir.
+1. **Bellek İçi Durum Deposu (`ConcurrentHashMap`)**: Mesaj geldiğinde dökümanın sürüm bilgisi bellek içindeki thread-safe durum deposunda kontrol edilir (Harici veritabanına ihtiyaç duyulmaz).
 2. **Sürüm Kontrolü**:
-   * Gelen mesajın `version` değeri veritabanındakinden **küçük veya eşitse** (`gelen <= mevcut`): Olay bayat (stale) kabul edilir; OpenSearch'e dokunulmaz ve Kafka'ya `ACK` verilip sessizce geçilir.
-   * Gelen mesajın `version` değeri **büyükse** (`gelen > mevcut`): OpenSearch güncellenir ve veritabanına yeni versiyon yazılır.
-3. **Offset Commit**: Sadece PostgreSQL ve OpenSearch işlemleri başarıyla tamamlandıktan sonra Kafka offset'i kaydedilir (`AckMode.RECORD`). Asla veri kaybı yaşanmaz.
+   * Gelen mesajın `version` değeri hafızadakinden **küçük veya eşitse** (`gelen <= mevcut`): Olay bayat (stale) kabul edilir; OpenSearch'e dokunulmaz ve Kafka'ya `ACK` verilip sessizce geçilir.
+   * Gelen mesajın `version` değeri **büyükse** (`gelen > mevcut`): Doğrudan OpenSearch güncellenir ve yeni versiyon hafızaya işlenir.
+3. **Offset Commit**: OpenSearch işlemi başarıyla tamamlandıktan sonra Kafka offset'i kaydedilir (`AckMode.RECORD`). Asla veri kaybı yaşanmaz.
+4. **Tek Veri Deposu (Single Source of Truth)**: Tüm dokümanlar, metinler, filtre alanları ve embedding vektörleri yalnızca **OpenSearch** içerisinde saklanır.
 
 ---
 
@@ -258,20 +259,19 @@ Airgap ağdaki K8s üreticileri bazen ağ kesilmeleri nedeniyle aynı mesajı 2 
 ### S1: `UnknownHostException: kafka-0.kafka-headless.default.svc.cluster.local`
 * **Neden**: K8s Kafka pod'u dış istemciye küme içi DNS adını göndermiştir.
 * **Çözüm**:
-  1. K8s yöneticinize Kafka `advertised.listeners` ayarını dış IP olacak şekilde güncellemesini söyleyin.
-  2. Veya acil geçici çözüm olarak Windows `C:\Windows\System32\drivers\etc\hosts` dosyasına ilgili K8s Node IP'sini ve bu hostname'i yazın.
+  1. K8s yöneticinize Kafka `advertised.listeners` ayarını dış IP / NodePort olacak şekilde yapılandırmasını söyleyin.
+  2. Veya acil geçici çözüm olarak Windows `C:\Windows\System32\drivers\etc\hosts` (veya Linux `/etc/hosts`) dosyasına ilgili K8s Node IP'sini ve bu hostname'i yazın.
 
-### S2: `org.apache.kafka.common.errors.TimeoutException: Topic olaylar-events not present in metadata after 10000 ms`
-* **Neden**: K8s kümesinde `olaylar-events` topic'i henüz yaratılmamıştır ve Kafka'da `auto.create.topics.enable=false` ayarlanmıştır.
+### S2: `org.apache.kafka.common.errors.TimeoutException: Topic ... not present in metadata after 10000 ms`
+* **Neden**: K8s kümesinde dinlenmek istenen topic henüz yaratılmamıştır ve Kafka'da `auto.create.topics.enable=false` ayarlanmıştır.
 * **Çözüm**: K8s içindeki Kafka container'ında veya yönetim panelinde topic'i manuel oluşturun:
   ```bash
-  kafka-topics.sh --bootstrap-server localhost:9092 --create --topic olaylar-events --partitions 3 --replication-factor 1
+  kafka-topics.sh --bootstrap-server localhost:9092 --create --topic <topic-adiniz> --partitions 3 --replication-factor 1
   ```
 
-### S3: `InvalidSearchEventException: Olay tipi (eventType) zorunludur`
-* **Neden**: K8s üreticisinin bastığı JSON formatı `eventType` veya `documentId` alanını içermemektedir.
-* **Çözüm**: Mesaj otomatik olarak `olaylar.indexing.errors` (DLQ) topic'ine atılır ve ana tüketim hattı tıkanmaz. Üretici sistemin JSON şablonunu Bölüm 4'teki formata uygun hale getirin.
+### S3: Farklı JSON Formatları (Düz Doküman vs Zarflı Mesaj)
+* **Durum**: Sistemimiz hem zarflı mesajları (`{eventId, eventType, documentId, version, data}`) hem de doğrudan ham JSON dökümlerini (`{id, title, content}`) otomatik algılayıp işleyebilir. Format uyuşmazlığı durumunda mesaj DLQ'ya düşmez, otomatik olarak OpenSearch modeline eşlenir.
 
-### S4: Mesajlar Tüketiliyor Fakat OpenSearch'e Yazılmıyor
-* **Neden**: Gönderilen `eventType` değeri `application.yml` dosyasındaki `search.kafka.routes` listesinde tanımlı değildir.
-* **Çözüm**: Gelen olay tipini (örneğin `[YeniOlayTipi]`) `application.yml` altındaki `routes` bölümüne ekleyin.
+### S4: Tanımlanmamış Olay Tipleri (Fallback Mekanizması)
+* **Durum**: `application.yml` içinde tanımlanmamış bir `eventType` geldiğinde sistem olayı yoksaymaz; otomatik olarak varsayılan indekse (`SEARCH_DEFAULT_INDEX`) UPSERT işlemi olarak OpenSearch'e yazar. Silme işlemleri için `eventType` içinde "DELETE" geçmesi yeterlidir.
+

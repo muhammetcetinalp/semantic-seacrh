@@ -1,12 +1,12 @@
 package com.example.semantic_search.service;
 
-import com.example.semantic_search.model.SearchIndexingEvent;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
@@ -26,16 +26,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@code olaylar.json} dosyasındaki olayları simülasyon amacıyla Kafka {@code olaylar-events} konusuna
- * gerçek zamanlı akış (streaming) olarak basan üretici (producer) servisi.
- *
- * <p>Web arayüzünden veya REST API üzerinden başlatılıp durdurulabilir; gecikme süresi (delayMs)
- * ve gönderim limitleri dinamik olarak ayarlanabilir.</p>
+ * Airgap ve test ortamlarında veri akışını simüle etmek amacıyla JSON veri dosyalarındaki kayıtları
+ * Kafka konularına gerçek zamanlı streaming olarak basan jenerik üretici (producer) servisi.
  */
 @Service
-public class OlaylarKafkaSimulationProducer {
+public class KafkaSimulationProducer {
 
-    private static final Logger log = LoggerFactory.getLogger(OlaylarKafkaSimulationProducer.class);
+    private static final Logger log = LoggerFactory.getLogger(KafkaSimulationProducer.class);
 
     private final ObjectMapper objectMapper;
     private final String bootstrapServers;
@@ -50,13 +47,14 @@ public class OlaylarKafkaSimulationProducer {
     private volatile String lastEventSummary = null;
 
     /**
-     * OlaylarKafkaSimulationProducer bileşenini yapılandıran yapıcı metot.
+     * KafkaSimulationProducer bileşenini yapılandıran yapıcı metot.
      *
      * @param objectMapper Jackson JSON dönüştürücüsü
      * @param bootstrapServers Kafka sunucu adresi
      * @param defaultTopic Varsayılan Kafka konusu
      */
-    public OlaylarKafkaSimulationProducer(
+    @Autowired
+    public KafkaSimulationProducer(
             ObjectMapper objectMapper,
             @Value("${spring.kafka.bootstrap-servers:localhost:9092}") String bootstrapServers,
             @Value("${search.kafka.topics:olaylar-events}") String defaultTopic) {
@@ -68,8 +66,8 @@ public class OlaylarKafkaSimulationProducer {
     /**
      * Arka plan iş parçacığında asenkron canlı simülasyonu başlatır.
      *
-     * @param limit Gönderilecek maksimum olay sayısı (0 veya daha küçükse dosyadaki tüm olaylar)
-     * @param delayMs Olaylar arası bekleme süresi (milisaniye)
+     * @param limit Gönderilecek maksimum olay sayısı (0 veya daha küçükse dosyadaki tüm kayıtlar)
+     * @param delayMs Kayıtlar arası bekleme süresi (milisaniye)
      * @return Simülasyon başarıyla başlatıldıysa true, zaten çalışıyorsa false
      */
     public synchronized boolean startSimulation(int limit, long delayMs) {
@@ -89,7 +87,7 @@ public class OlaylarKafkaSimulationProducer {
     }
 
     /**
-     * Çalışmakta olan Kafka olay simülasyonunu durdurur.
+     * Çalışmakta olan Kafka veri simülasyonunu durdurur.
      */
     public synchronized void stopSimulation() {
         if (running.get()) {
@@ -118,18 +116,18 @@ public class OlaylarKafkaSimulationProducer {
     }
 
     /**
-     * Kafka Producer ana döngüsü. {@code olaylar.json} dosyasını okur ve sırayla Kafka'ya gönderir.
+     * Kafka Producer ana döngüsü. JSON dosyasını okur ve sırayla Kafka'ya gönderir.
      *
      * @param bootstrap Kafka bootstrap sunucuları
      * @param topic Hedef konu
-     * @param limit Maksimum olay adedi
+     * @param limit Maksimum kayıt adedi
      * @param delayMs Gecikme süresi
      */
     private void runProducerLoop(String bootstrap, String topic, int limit, long delayMs) {
-        File file = locateOlaylarFile();
+        File file = locateDataFile();
         if (file == null) {
-            log.error("olaylar.json dosyası bulunamadı! Simülasyon iptal edildi.");
-            lastStatus = "ERROR: olaylar.json bulunamadı";
+            log.error("Veri dosyası (data.json / dataset.json / olaylar.json) bulunamadı! Simülasyon iptal edildi.");
+            lastStatus = "ERROR: Veri dosyası bulunamadı";
             running.set(false);
             return;
         }
@@ -146,22 +144,25 @@ public class OlaylarKafkaSimulationProducer {
 
             JsonNode root = objectMapper.readTree(is);
             if (!root.isArray()) {
-                log.error("olaylar.json geçerli bir dizi içermiyor!");
+                log.error("Veri dosyası geçerli bir JSON dizisi içermiyor!");
                 lastStatus = "ERROR: Geçersiz JSON formatı";
                 running.set(false);
                 return;
             }
 
             int total = (limit > 0) ? Math.min(limit, root.size()) : root.size();
-            log.info("Kafka Simülasyonu BAŞLADI: {} olay, konu='{}', gecikme={}ms", total, topic, delayMs);
+            log.info("Kafka Simülasyonu BAŞLADI: {} kayıt, konu='{}', gecikme={}ms", total, topic, delayMs);
 
             for (int i = 0; i < total && running.get(); i++) {
                 JsonNode rawDoc = root.get(i);
-                String docId = rawDoc.path("entityId").asText(UUID.randomUUID().toString());
-                String eventType = rawDoc.path("entityType").asText("OLAY");
-                if (eventType == null || eventType.isBlank()) {
-                    eventType = "OLAY";
-                }
+                String docId = rawDoc.path("entityId").asText(
+                        rawDoc.path("id").asText(
+                                rawDoc.path("documentId").asText(UUID.randomUUID().toString())));
+
+                String eventType = rawDoc.path("entityType").asText(
+                        rawDoc.path("type").asText(
+                                rawDoc.path("category").asText("DATA_EVENT")));
+
                 long version = rawDoc.path("version").asLong(1L);
 
                 ObjectNode envelope = objectMapper.createObjectNode();
@@ -181,7 +182,7 @@ public class OlaylarKafkaSimulationProducer {
                 });
 
                 publishedCount.incrementAndGet();
-                String title = rawDoc.path("title").asText("Başlıksız Olay");
+                String title = rawDoc.path("title").asText(rawDoc.path("name").asText("Kayıt"));
                 lastEventSummary = String.format("[%d/%d] %s (%s)", publishedCount.get(), total, title, docId);
 
                 if (delayMs > 0) {
@@ -209,34 +210,30 @@ public class OlaylarKafkaSimulationProducer {
     }
 
     /**
-     * {@code olaylar.json} dosyasını diskte arar.
+     * Veri dosyasını diskte arar.
      *
      * @return File nesnesi veya null
      */
-    private File locateOlaylarFile() {
-        Path p1 = Paths.get("src/main/java/com/example/semantic_search/olaylar.json");
-        if (Files.exists(p1)) return p1.toFile();
+    private File locateDataFile() {
+        String[] candidateNames = {"data.json", "dataset.json", "olaylar.json"};
+        String[] candidateDirs = {
+                "",
+                "src/main/resources/",
+                "src/main/java/com/example/semantic_search/"
+        };
 
-        Path p2 = Paths.get("olaylar.json");
-        if (Files.exists(p2)) return p2.toFile();
-
-        Path p3 = Paths.get("src/main/resources/olaylar.json");
-        if (Files.exists(p3)) return p3.toFile();
+        for (String name : candidateNames) {
+            for (String dir : candidateDirs) {
+                Path p = Paths.get(dir + name);
+                if (Files.exists(p)) return p.toFile();
+            }
+        }
 
         return null;
     }
 
     /**
      * Simülasyon durum bilgilerini istemciye aktaran kayıt sınıfı.
-     *
-     * @param running Çalışıyor mu
-     * @param publishedCount Gönderilen mesaj adedi
-     * @param targetLimit Hedeflenen toplam adet
-     * @param delayMs Gecikme süresi
-     * @param topic Kafka konusu
-     * @param bootstrapServers Kafka sunucuları
-     * @param status Durum metni
-     * @param lastEventSummary Son iletilen olay özeti
      */
     public record SimulationStatus(
             boolean running,

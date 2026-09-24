@@ -8,18 +8,12 @@ import com.example.semantic_search.model.IndexingState;
 import com.example.semantic_search.model.SearchIndexingEvent;
 import com.example.semantic_search.repository.IndexingStateRepository;
 import jakarta.validation.Validator;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Kafka veya diğer mesaj kuyruklarından gelen arama olaylarını doğrulayan,
  * sürüm (versioning) ve bayatlık (staleness) kontrolü yapan, ardından
  * {@link IndexingService} üzerinden ekleme, güncelleme veya silme işlemlerini yürüten işlemci servisi.
- *
- * <p>İşlemler veritabanı seviyesinde {@code @Transactional} olarak çalışır ve
- * Kafka ofseti işlem onaylanmadan önce taahhüt edilmez (commit edilmez).</p>
  */
-@Service
 public class SearchEventProcessor {
 
     /**
@@ -66,11 +60,22 @@ public class SearchEventProcessor {
      * @return İşlem sonucu (PROCESSED, IGNORED veya STALE)
      * @throws InvalidSearchEventException Olay formatı geçersiz ise
      */
-    @Transactional
     public Outcome process(String message) {
         SearchIndexingEvent event = mapper.read(message);
-        KafkaIndexingProperties.EventRoute route = properties.getRoutes().get(event.eventType());
-        if (route == null) return Outcome.IGNORED;
+        KafkaIndexingProperties.EventRoute configuredRoute = properties.getRoutes().get(event.eventType());
+        final KafkaIndexingProperties.EventRoute route;
+        if (configuredRoute != null) {
+            route = configuredRoute;
+        } else {
+            String fallbackIndex = properties.getRoutes().values().stream()
+                    .findFirst()
+                    .map(KafkaIndexingProperties.EventRoute::indexName)
+                    .orElse("olaylar");
+            KafkaIndexingProperties.Operation op = (event.eventType() != null && event.eventType().toUpperCase().contains("DELETE"))
+                    ? KafkaIndexingProperties.Operation.DELETE
+                    : KafkaIndexingProperties.Operation.UPSERT;
+            route = new KafkaIndexingProperties.EventRoute(op, fallbackIndex, event.eventType() != null ? event.eventType() : "DOCUMENT");
+        }
         validate(event);
 
         // Eşleme ve doğrulama harici işlem yapılmadan önce gerçekleşir
@@ -83,11 +88,12 @@ public class SearchEventProcessor {
             }
         }
 
-        IndexingState state = repository.findByDocumentIdAndIndexNameForUpdate(event.documentId(), route.indexName())
+        final String indexName = route.indexName();
+        IndexingState state = repository.findByDocumentIdAndIndexNameForUpdate(event.documentId(), indexName)
                 .orElseGet(() -> {
                     IndexingState pending = new IndexingState();
                     pending.setDocumentId(event.documentId());
-                    pending.setIndexName(route.indexName());
+                    pending.setIndexName(indexName);
                     return repository.saveAndFlush(pending);
                 });
 
@@ -97,7 +103,7 @@ public class SearchEventProcessor {
 
         switch (route.operation()) {
             case UPSERT -> indexingService.updateDocument(event.documentId(), document);
-            case DELETE -> indexingService.deleteDocument(route.indexName(), event.documentId());
+            case DELETE -> indexingService.deleteDocument(indexName, event.documentId());
         }
 
         state.setLastEventId(event.eventId());

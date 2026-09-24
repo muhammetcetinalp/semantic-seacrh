@@ -14,7 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -72,7 +71,6 @@ public class IndexingService {
      *
      * @param request İndekslenecek doküman isteği DTO'su
      */
-    @Transactional
     public void indexDocument(IndexDocumentRequest request) {
         String indexName = resolveIndexName(request.getIndexName());
         Instant now = Instant.now();
@@ -113,7 +111,6 @@ public class IndexingService {
      * @param documentId Güncellenecek doküman kimliği
      * @param request Yeni doküman verisi
      */
-    @Transactional
     public void updateDocument(String documentId, IndexDocumentRequest request) {
         String indexName = resolveIndexName(request.getIndexName());
         Instant now = Instant.now();
@@ -170,7 +167,6 @@ public class IndexingService {
      * @param indexName Hedef indeks adı
      * @param documentId Silinecek doküman ID'si
      */
-    @Transactional
     public void deleteDocument(String indexName, String documentId) {
         String resolvedIndex = resolveIndexName(indexName);
 
@@ -191,7 +187,6 @@ public class IndexingService {
      *
      * @param requests Doküman istekleri listesi
      */
-    @Transactional
     public void bulkIndex(List<IndexDocumentRequest> requests) {
         if (requests == null || requests.isEmpty()) return;
 
@@ -309,10 +304,20 @@ public class IndexingService {
      * @param indexName İndeks adı
      * @return İndeks adı
      */
-    private String resolveIndexName(String indexName) {
+    public String resolveIndexName(String indexName) {
         return (indexName != null && !indexName.isBlank())
                 ? indexName
                 : searchProperties.getDefaultIndexName();
+    }
+
+    /**
+     * Belirtilen indeksteki toplam doküman sayısını döner.
+     *
+     * @param indexName İndeks adı
+     * @return Doküman sayısı
+     */
+    public long countDocuments(String indexName) {
+        return openSearchAdapter.countDocuments(resolveIndexName(indexName));
     }
 
     /**

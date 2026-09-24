@@ -1,108 +1,67 @@
 package com.example.semantic_search.model;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.SequenceGenerator;
-import jakarta.persistence.Table;
-
 import java.time.Instant;
 
 /**
- * İlişkisel veritabanında (PostgreSQL) dokümanların indeksleme durumunu takip eden JPA varlığı (Entity).
+ * Dokümanların indeksleme durumunu takip eden operasyonel model.
  *
- * <p>Bu varlık iş verisinin kendisi değildir; Arama Servisi'nin kendi operasyonel durumudur.
- * Dokümanın OpenSearch'e başarıyla yazılıp yazılmadığını, en son hangi olay versiyonunun işlendiğini,
+ * <p>Dokümanın OpenSearch'e başarıyla yazılıp yazılmadığını, en son hangi olay versiyonunun işlendiğini,
  * hata durumlarını ve tekrar deneme (retry) sayılarını takip ederek veri tutarlılığını garanti eder.</p>
  */
-@Entity
-@Table(name = "indexing_state")
 public class IndexingState {
 
-    /** Otomatik artan birincil anahtar (Primary Key). */
-    @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "indexing_state_id")
-    @SequenceGenerator(name = "indexing_state_id", sequenceName = "indexing_state_seq", allocationSize = 1)
+    /** Otomatik artan kayıt kimliği. */
     private Long id;
 
     /** İndekslenen dokümanın harici iş kimliği (ID). */
-    @Column(name = "document_id", nullable = false)
     private String documentId;
 
     /** Dokümanın yazıldığı OpenSearch indeksinin adı. */
-    @Column(name = "index_name", nullable = false)
     private String indexName;
 
     /** Dokümanın anlık indeksleme durumu (PENDING, INDEXED, FAILED, DELETED). */
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 50)
     private IndexingStatus status = IndexingStatus.PENDING;
 
     /** Metin içeriğindeki değişiklikleri tespit etmek için kullanılan SHA-256 özeti. */
-    @Column(name = "search_text_hash", length = 64)
     private String searchTextHash;
 
     /** Dokümanı güncelleyen son Kafka olayının kimliği. */
-    @Column(name = "last_event_id", length = 128)
     private String lastEventId;
 
     /** Dokümana ait son işlenen olay sürüm numarası (sırasız olayları engellemek için). */
-    @Column(name = "last_event_version")
     private Long lastEventVersion;
 
-    /** OpenSearch'e gönderilen orijinal JSON doküman kaynağı (TEXT tipinde). */
-    @Column(name = "document_source", columnDefinition = "TEXT")
+    /** OpenSearch'e gönderilen orijinal JSON doküman kaynağı. */
     private String documentSource;
 
     /** Dokümanın OpenSearch üzerinde en son başarılı indekslendiği zaman. */
-    @Column(name = "last_indexed_at")
     private Instant lastIndexedAt;
 
     /** Başarısızlık durumunda kaydedilen hata mesajı. */
-    @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
     /** Hata sonrası yapılan yeniden deneme sayısı. */
-    @Column(name = "retry_count", nullable = false)
     private int retryCount = 0;
 
     /** Kaydın ilk oluşturulma zamanı. */
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
+    private Instant createdAt = Instant.now();
 
     /** Kaydın son güncellenme zamanı. */
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
+    private Instant updatedAt = Instant.now();
 
-    /**
-     * Varlık kaydedilmeden önce oluşturulma ve güncellenme tarihlerini ayarlar.
-     */
-    @PrePersist
-    protected void onCreate() {
-        Instant now = Instant.now();
-        createdAt = now;
-        updatedAt = now;
+    public IndexingState() {
     }
 
-    /**
-     * Varlık güncellenmeden önce son güncellenme tarihini yeniler.
-     */
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = Instant.now();
+    public IndexingState(String documentId, String indexName) {
+        this.documentId = documentId;
+        this.indexName = indexName;
     }
 
     // --- Getters / Setters ---
 
-    /** @return Veritabanı ID */
+    /** @return Kayıt ID */
     public Long getId() { return id; }
-    /** @param id Veritabanı ID */
+    /** @param id Kayıt ID */
     public void setId(Long id) { this.id = id; }
 
     /** @return Doküman ID */
@@ -157,7 +116,9 @@ public class IndexingState {
 
     /** @return Oluşturulma zamanı */
     public Instant getCreatedAt() { return createdAt; }
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 
     /** @return Son güncellenme zamanı */
     public Instant getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }

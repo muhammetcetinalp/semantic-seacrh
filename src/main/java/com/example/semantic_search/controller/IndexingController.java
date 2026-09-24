@@ -3,6 +3,7 @@ package com.example.semantic_search.controller;
 import com.example.semantic_search.dto.IndexDocumentRequest;
 import com.example.semantic_search.service.IndexingService;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +25,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/v1/index")
+@CrossOrigin
 public class IndexingController {
 
     private final IndexingService indexingService;
@@ -33,6 +35,7 @@ public class IndexingController {
      *
      * @param indexingService İndeksleme iş mantığı servisi
      */
+    @Autowired
     public IndexingController(IndexingService indexingService) {
         this.indexingService = indexingService;
     }
@@ -93,5 +96,21 @@ public class IndexingController {
         indexingService.bulkIndex(requests);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(Map.of("status", "indexed", "count", requests.size()));
+    }
+
+    /**
+     * İndeksteki toplam doküman adedini döner (Oracle ile veri tutarlılığı kontrolü için).
+     *
+     * @param indexName Hedef indeks adı (opsiyonel)
+     * @return İndeks adı ve toplam doküman sayısı
+     */
+    @GetMapping("/count")
+    public ResponseEntity<Map<String, Object>> getDocumentCount(
+            @RequestParam(required = false) String indexName) {
+        long count = indexingService.countDocuments(indexName);
+        return ResponseEntity.ok(Map.of(
+                "indexName", indexingService.resolveIndexName(indexName),
+                "documentCount", count
+        ));
     }
 }
