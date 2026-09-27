@@ -1,0 +1,1120 @@
+================================================================================
+DİZİN BAZLI KOD TEMİZLİK, OPTİMİZASYON VE AYIKLAMA REHBERİ
+================================================================================
+
+BU DÖKÜMANIN AMACI:
+Proje içerisindeki gereksiz/artık (dead code) sınıfları tespit etmek; yerel ağda,
+API Key ile korunan özel yapay zeka sunucularının (Embedding & Reranker) bulunduğu
+ve internet erişimi olmayan (Airgap) Kubernetes mimarisine göre hangi sınıfların
+silineceğini, hangilerinin kalacağını ve hangi durumda nerelerin düzeltileceğini
+dizin bazında adım adım açıklamaktır.
+
+================================================================================
+1. DİZİN: client/embedding (Vektör Gömme Sağlayıcıları)
+================================================================================
+Klasör Yolu: 
+src/main/java/com/example/semantic_search/client/embedding/
+
+İlgili Konfigürasyon:
+src/main/java/com/example/semantic_search/config/EmbeddingProperties.java
+src/main/resources/application.yml (search.embedding bölümü)
+
+MEVCUT SINIFLAR:
+1. EmbeddingProvider.java (Interface)
+2. MockEmbeddingProvider.java (Class)
+3. TeiEmbeddingProvider.java (Class)
+4. RestEmbeddingProvider.java (Class)
+
+--------------------------------------------------------------------------------
+A) HANGİ CLASS KESİNLİKLE KALMALI? (ŞART):
+--------------------------------------------------------------------------------
+-> "EmbeddingProvider.java" (Arayüz):
+   - DURUM: %100 KALMALI, ASLA SİLİNEMEZ!
+   - NEDEN?: Projenin ortak sözleşmesidir. IndexingService ve SearchService doğrudan
+     bu arayüze bağımlıdır.
+   - KRİTİK GÖREVİ: İçerisindeki "normalizeL2(float[] vector)" statik fonksiyonu,
+     üretilen vektörün boyunu 1.0 birime normalize eder. Bu matematiksel işlem
+     olmadan OpenSearch üzerinde kosinüs benzerliği (Cosine Similarity) araması
+     doğru çalışmaz.
+
+--------------------------------------------------------------------------------
+B) HANGİ CLASS KESİNLİKLE GEREKSİZDİR? (SİLİNEBİLİR):
+--------------------------------------------------------------------------------
+-> "MockEmbeddingProvider.java":
+   - DURUM: CANLI ORTAM İÇİN GEREKSİZDİR (SİLİNEBİLİR veya DEVRE DIŞI BIRAKILABİLİR).
+   - NEDEN?: Bu sınıf yerel bilgisayarda GPU/model sunucusu yokken metnin hash'ine
+     göre sahte vektörler üretmek için yazılmıştır.
+   - SENİN ORTAMINDA: Yerel ağında API Key ile eriştiğin gerçek bir model sunucun
+     olduğu için bu sınıfa canlıda hiçbir ihtiyaç yoktur.
+   - EĞER SİLMEK İSTEMEZSEN: "application.yml" içinde provider "tei" veya "rest"
+     seçildiği sürece Spring Boot bunu belleğe yüklemez, zararsızca durabilir.
+     Ancak temiz bir kod tabanı için projeden tamamen çıkarılabilir.
+
+--------------------------------------------------------------------------------
+C) HANGİ CLASS SEÇİLMELİ, HANGİSİ SİLİNMELİ? (KARAR AĞACI):
+--------------------------------------------------------------------------------
+Yerel ağındaki model sunucunun beklediği JSON API formatına göre Tei veya Rest
+sınıflarından BİRİ SEÇİLECEK, DİĞERİ SİLİNECEKTİR.
+
+1. DURUM (HuggingFace TEI Konteyneri Formatı):
+   - Eğer sunucun "POST /embed" adresine şu gövdeyi bekliyorsa:
+     {"inputs": "arama yapılacak metin"}
+     ve cevap olarak doğrudan sayı dizisi dönüyorsa: [[0.123, -0.456, ...]]
+   
+   -> HANGİSİ KALMALI?: "TeiEmbeddingProvider.java" KALIR.
+   -> HANGİSİ SİLİNMELİ?: "RestEmbeddingProvider.java" SİLİNİR (Gereksizdir).
+   
+   -> NERELER DÜZELTİLECEK? (application.yml):
+      search:
+        embedding:
+          provider: tei
+          endpoint: ${EMBEDDING_ENDPOINT:http://yerel-model-sunucu-ip:8081}
+          api-key: ${EMBEDDING_API_KEY:senin_api_anahtarin}
+          api-key-header: Authorization # veya X-API-Key
+          dimensions: 1024
+          timeout: 10000
+
+2. DURUM (OpenAI / vLLM / FastAPI Standardı):
+   - Eğer sunucun "POST /v1/embeddings" adresine şu gövdeyi bekliyorsa:
+     {"input": "arama metni", "model": "BAAI/bge-m3"}
+     ve cevap olarak şunu dönüyorsa:
+     {"data": [{"embedding": [0.123, -0.456, ...]}]}
+   
+   -> HANGİSİ KALMALI?: "RestEmbeddingProvider.java" KALIR.
+   -> HANGİSİ SİLİNMELİ?: "TeiEmbeddingProvider.java" SİLİNİR (Gereksizdir).
+   
+   -> NERELER DÜZELTİLECEK? (application.yml):
+      search:
+        embedding:
+          provider: rest
+          endpoint: ${EMBEDDING_ENDPOINT:http://yerel-model-sunucu-ip:8080/v1/embeddings}
+          model: BAAI/bge-m3
+          api-key: ${EMBEDDING_API_KEY:senin_api_anahtarin}
+          api-key-header: Authorization
+          dimensions: 1024
+          timeout: 10000
+
+--------------------------------------------------------------------------------
+D) EMBEDDING DİZİNİ SONUÇ VE ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++--------------------------+-------------+------------------------------------+
+| Sınıf Adı                | Durum       | Gerekçe                            |
++--------------------------+-------------+------------------------------------+
+| EmbeddingProvider.java   | KALACAK     | Temel arayüz ve L2 normalizasyonu  |
+| MockEmbeddingProvider    | SİLİNECEK   | Canlı ortamda sahte vektör olmaz   |
+| TeiEmbeddingProvider     | SEÇİMLİK    | Sunucun TEI (/embed) formatındaysa |
+| RestEmbeddingProvider    | SEÇİMLİK    | Sunucun OpenAI/vLLM formatındaysa  |
++--------------------------+-------------+------------------------------------+
+
+Net Kural:
+Dizinde toplam 4 sınıf vardır; temizlik sonunda bu dizinde sadece 2 SINIF kalmalıdır:
+1. EmbeddingProvider.java
+2. TeiEmbeddingProvider.java VEYA RestEmbeddingProvider.java
+
+================================================================================
+2. DİZİN: client/opensearch (OpenSearch İstemcisi, Eşleyici ve Sağlık Kontrolü)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/client/opensearch/
+
+MEVCUT SINIFLAR:
+1. OpenSearchAdapter.java (Class)
+2. OpenSearchDocumentSourceMapper.java (Class)
+3. OpenSearchHealthIndicator.java (Class)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDE SİLİNMESİ GEREKEN BİR CLASS VAR MI?:
+--------------------------------------------------------------------------------
+-> CEVAP: HAYIR! BU DİZİNDE HİÇBİR SINIF SİLİNMEMELİDİR.
+   Her 3 sınıf da mimarinin temel direğidir:
+   1. OpenSearchAdapter.java: İndeks yönetimi, BM25, k-NN vektör araması ve hibrit
+      RRF/Score birleştirmesini yürüten ana motordur. Kesinlikle kalmalı.
+   2. OpenSearchDocumentSourceMapper.java: SearchDocument nesnesini OpenSearch'ün
+      anlayacağı JSON ve Map formatına çeviren ayrıştırıcıdır. Kesinlikle kalmalı.
+   3. OpenSearchHealthIndicator.java: Spring Boot Actuator (/actuator/health)
+      arayüzüdür. Kubernetes Liveness/Readiness Probe'larının OpenSearch bağlantısını
+      denetlemesi için gereklidir. Kesinlikle kalmalı.
+
+--------------------------------------------------------------------------------
+B) REHBER HARİCİNDE NERELER DÜZELTİLMELİ VEYA DİKKAT EDİLMELİDİR?:
+--------------------------------------------------------------------------------
+YENI_VERI_MODELI_KURULUM_REHBERI.txt dökümanında anlatılan dinamik mapping ve CORE_FIELDS
+güncellemelerine ek olarak, canlı/Airgap Kubernetes ortamı için şu 4 nokta kritiktir:
+
+1. REPLICA VE SHARD SAYISI AYARI (OpenSearchAdapter.java -> createIndexIfNotExists):
+   - Koddaki Mevcut Durum:
+     .numberOfShards(1)
+     .numberOfReplicas(0)
+   - Ne Zaman Düzeltilmeli?:
+     * Eğer Kubernetes ortamında OpenSearch tek bir Pod (Single-Node) olarak çalışıyorsa:
+       "numberOfReplicas(0)" OLARAK KALMALIDIR! Çünkü tek pod varken replica 1 yapılırsa,
+       OpenSearch kopyayı koyacak ikinci bir pod/node bulamaz ve küme durumu sarıya (YELLOW)
+       düşer, gereksiz alarm üretir.
+     * Eğer Kubernetes'te OpenSearch bir StatefulSet veya çoklu sunucu (Cluster) olarak
+       çalışıyorsa: Yüksek erişilebilirlik (HA) için "numberOfReplicas(1)" yapılmalıdır.
+
+2. KORUMALI KELİMELER VE "turkey_locations.json" BAĞIMLILIĞI:
+   - Koddaki Durum:
+     OpenSearchAdapter başlatılırken "loadProtectedLocationKeywords()" fonksiyonu
+     "src/main/resources/data/turkey_locations.json" dosyasından il/ilçe isimlerini okur.
+     Bunu Türkçe stemmer'ın (kök bulucunun) il isimlerini (örneğin "Bolu" -> "Bol" yapmasın diye)
+     bozmaması için koruma listesine (turkish_keywords filtresi) ekler.
+   - Ne Zaman Düzeltilmeli?:
+     * Eğer yeni veri modelinizde lokasyon / adres yerine sektörel, teknik, kodlama veya
+       özel terminoloji varsa: "turkey_locations.json" yerine projenize ait özel kısaltmaları
+       ve bozulmaması gereken terimleri içeren bir JSON hazırlayıp buraya bağlayabilirsiniz.
+     * Lokasyonla işiniz yoksa bile bu kod hata vermez; sessizce korumaya devam eder (zararsızdır).
+
+3. HNSW VEKTÖR PARAMETRELERİ (BGE-M3 1024 Boyut İçin):
+   - Koddaki Durum:
+     .dimension(embeddingProperties.getDimensions()) // 1024
+     .spaceType("cosinesimil")
+     .engine("faiss")
+     .parameters(Map.of("ef_construction", 256, "m", 16))
+   - Durum: MÜKEMMELDİR, DOKUNMAYIN!
+     BGE-M3 (1024 float) vektörleri için FAISS kütüphanesinin HNSW algoritması en yüksek
+     arama hızı (QPS) ve alaka düzeyini (Recall) sağlar.
+
+4. HİBRİT ARAMA LİMİT KORUMASI (OOM KORUMASI):
+   - Koddaki Durum (OpenSearchAdapter.java -> hybridSearch):
+     int fetchLimit = Math.min((limit + safeOffset) * 3, 100);
+   - Dikkat Edilecek Husus:
+     Eğer arayüzden tek seferde 100'den fazla sonuç çekmek isterseniz (örneğin export almak için),
+     bu formül aramayı maksimum 100 aday ile sınırlar. Çok büyük listelemeler gerekiyorsa buradaki
+     100 tavan limiti ihtiyaca göre artırılabilir (örn: 500).
+
+5. DİNAMİK 70 ALAN FİLTRELEMEDE ".keyword" ALTI ALAN KURALI:
+   - Koddaki Durum (OpenSearchAdapter.java -> addFilters):
+     Set<String> keywordSubfields = Set.of("type", "birim", "title", "adres");
+     String filterField = (keywordSubfields.contains(field) && !field.endsWith(".keyword"))
+             ? field + ".keyword" : field;
+   - Dikkat Edilecek Husus:
+     Eski kodda sadece 4 alana otomatik ".keyword" eklenmektedir. Ancak yeni veri modelinizdeki
+     70 dinamik alan (örneğin "sensor.kodu", "arac.plaka") OpenSearch'te hem text hem de keyword
+     olarak indekslenir. Bu alanlarda büyük-küçük harfe duyarlı tam eşleşme (term query) yaparken
+     kullanıcı/istemci filtre adını doğrudan "arac.plaka.keyword" olarak göndermelidir veya
+     bu metoda dinamik alanların da otomatik ".keyword" alması için genel bir kural eklenmelidir.
+
+
+--------------------------------------------------------------------------------
+C) OPENSEARCH DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++------------------------------------+---------+-----------------------------------------+
+| Sınıf Adı                          | Durum   | Gerekçe                                 |
++------------------------------------+---------+-----------------------------------------+
+| OpenSearchAdapter.java             | KALACAK | İndeks, BM25, k-NN ve Hibrit Arama motoru|
+| OpenSearchDocumentSourceMapper.java | KALACAK | SearchDocument -> JSON/Map dönüştürücü  |
+| OpenSearchHealthIndicator.java     | KALACAK | Kubernetes Pod Liveness/Readiness Probe |
++------------------------------------+---------+-----------------------------------------+
+
+Net Kural:
+Bu dizinden HİÇBİR SINIF SİLİNMEZ (3 sınıf da kalır).
+Sadece rehberdeki dinamik mapping güncellemeleri ve yukarıdaki Replica/Shard teyidi yapılır.
+
+================================================================================
+3. DİZİN: config (Yapılandırma ve Özellik Sınıfları)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/config/
+
+SENİN SENARYON:
+- Bir sunucuda OpenSearch kurulu.
+- Airgap (yerel ağ) ortamında başka bir sunucuda API Key korumalı BGE-M3 Embedding
+  ve Reranker modelleri çalışıyor.
+
+MEVCUT SINIFLAR:
+1. EmbeddingProperties.java (Class)
+2. OpenSearchProperties.java (Class)
+3. OpenSearchClientConfiguration.java (Class)
+4. SearchProperties.java (Class)
+5. WebConfiguration.java (Class)
+6. KafkaIndexingProperties.java (Class)
+7. KafkaIndexingConfiguration.java (Class)
+
+--------------------------------------------------------------------------------
+A) SENİN KURULUMUNDA KESİNLİKLE KALMASI GEREKEN SINIFLAR:
+--------------------------------------------------------------------------------
+1. "EmbeddingProperties.java":
+   - DURUM: %100 KALMALI.
+   - NEDEN?: Airgap sunucundaki modelin endpoint'ini, API anahtarını (api-key),
+     header tipini (Authorization / X-API-Key) ve 1024 vektör boyutunu Spring'e
+     aktaran sınıftır.
+
+2. "OpenSearchProperties.java":
+   - DURUM: %100 KALMALI.
+   - NEDEN?: Kurduğun OpenSearch sunucusunun host, port, şifre ve timeout bilgilerini
+     application.yml'dan okur.
+
+3. "OpenSearchClientConfiguration.java":
+   - DURUM: %100 KALMALI.
+   - NEDEN?: OpenSearch sunucunla fiziksel HTTP bağlantısını açan ve "OpenSearchClient"
+     nesnesini üreten fabrikadır. Bu sınıf olmadan OpenSearch'e tek bir satır yazılamaz.
+
+4. "WebConfiguration.java":
+   - DURUM: %100 KALMALI.
+   - NEDEN?: İçerisinde 2 kritik görev vardır:
+     a) "restClientBuilder()": Airgap model sunucularına HTTP isteği atarken kullanılan
+        Spring RestClient motorunu üretir. Bu sınıf silinirse embedding/reranker çağrıları çöker!
+     b) "addCorsMappings()": Arama arayüzünün (React/Vite vb.) backend'e erişmesini sağlar.
+
+5. "SearchProperties.java":
+   - DURUM: KALMALI.
+   - NEDEN?: Arama sonuç limitlerini (varsayılan: 20, tavan: 100) ve varsayılan arama
+     modunu (HYBRID) yönetir. Kodda sabit sayı bırakmamak için gereklidir.
+
+--------------------------------------------------------------------------------
+B) HANGİ DURUMDA HANGİ CLASS'LAR SİLİNEBİLİR? (KOŞULLU ANALİZ):
+--------------------------------------------------------------------------------
+-> "KafkaIndexingProperties.java" ve "KafkaIndexingConfiguration.java":
+
+   DURUM 1 (Kafka Kullanıyorsan):
+   - KALACAK: Veriler sisteme Kafka topic'leri üzerinden asenkron akıyorsa bu iki sınıf
+     sistemin beynidir; routing (yönlendirme) ve DLT hata yönetimini sağlar.
+
+   DURUM 2 (Kafka KULLANMIYORSAN - Sadece REST veya Batch Yükleme Yapıyorsan):
+   - SİLİNEBİLİR!: Eğer projende Kafka altyapısı kurmadıysan ve verileri OpenSearch'e
+     doğrudan REST API ("POST /api/v1/index") üzerinden veya bir script ile basıyorsan:
+     * "KafkaIndexingProperties.java" SİLİNEBİLİR.
+     * "KafkaIndexingConfiguration.java" SİLİNEBİLİR.
+     * Hatta "src/main/java/com/example/semantic_search/kafka/" klasörünün tamamı silinebilir!
+
+   ALTERNATİF (SİLMEDEN DEVRE DIŞI BIRAKMAK):
+   - Kodları silmek istemiyorsan ama ortamda Kafka yoksa:
+     "application.yml" dosyasına şu ayarı eklemen yeterlidir:
+     search:
+       kafka:
+         enabled: false
+     Bu ayar sayesinde "KafkaIndexingConfiguration" sınıfı kendini tamamen kapatır ve
+     arka planda hiçbir Kafka bağlantısı başlatmaz, hata vermez.
+
+--------------------------------------------------------------------------------
+C) SENİN SENARYON İÇİN NERELER DÜZELTİLECEK? (application.yml):
+--------------------------------------------------------------------------------
+1. OpenSearch Ayarları (src/main/resources/application.yml):
+   search:
+     opensearch:
+       host: ${OPENSEARCH_HOST:192.168.1.50} # Kurduğun OpenSearch sunucu IP'si
+       port: ${OPENSEARCH_PORT:9200}
+       scheme: http # SSL sertifikası varsa https
+       username: ${OPENSEARCH_USER:admin}
+       password: ${OPENSEARCH_PASS:senin_sifren}
+
+2. Airgap Model Sunucusu Ayarları:
+   search:
+     embedding:
+       provider: tei # veya rest
+       endpoint: ${EMBEDDING_ENDPOINT:http://192.168.1.60:8081} # Yerel model sunucun
+       api-key: ${EMBEDDING_API_KEY:senin_api_anahtarin}
+       api-key-header: Authorization # veya X-API-Key
+       dimensions: 1024
+       timeout: 30000
+
+3. Web & CORS Ayarları:
+   search:
+     cors:
+       allowed-origins: "http://localhost:5173,http://arayuz-sunucu-ip:3000"
+
+--------------------------------------------------------------------------------
+D) CONFIG DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++------------------------------------+-----------+---------------------------------------+
+| Sınıf Adı                          | Durum     | Gerekçe / Kullanım Koşulu             |
++------------------------------------+-----------+---------------------------------------+
+| OpenSearchProperties.java          | KALACAK   | Kurduğun OpenSearch IP/şifre ayarları |
+| OpenSearchClientConfiguration.java | KALACAK   | OpenSearch Java istemcisini kurar     |
+| EmbeddingProperties.java           | KALACAK   | Airgap API Key ve endpoint yönetimi   |
+| WebConfiguration.java              | KALACAK   | RestClient.Builder + CORS yönetimi    |
+| SearchProperties.java              | KALACAK   | Varsayılan limit ve mod tanımları     |
+| KafkaIndexingProperties.java       | KOŞULLU   | Sadece Kafka kullanılıyorsa kalır     |
+| KafkaIndexingConfiguration.java    | KOŞULLU   | Sadece Kafka kullanılıyorsa kalır     |
++------------------------------------+-----------+---------------------------------------+
+
+Net Kural:
+Senin mimarinde (Yerel OpenSearch + Airgap API Key Model Sunucusu):
+İlk 5 sınıf KESİNLİKLE KALMALIDIR.
+Son 2 Kafka sınıfı ise yalnızca Kafka kuyruklarını dinleyeceksen kalır;
+eğer veriyi REST ile basacaksan silinebilir veya "search.kafka.enabled: false" yapılabilir.
+
+================================================================================
+4. DİZİN: controller (REST API Uç Noktaları)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/controller/
+
+MEVCUT SINIFLAR:
+1. SearchController.java (Class)
+2. IndexingController.java (Class)
+3. DataIngestionController.java (Class)
+4. SimulationController.java (Class)
+5. RootController.java (Class)
+
+--------------------------------------------------------------------------------
+A) HANGİ CLASS'LAR KESİNLİKLE KALMALI?:
+--------------------------------------------------------------------------------
+1. "SearchController.java":
+   - DURUM: %100 KALMALI.
+   - GÖREVİ: Arama motorunun ana giriş noktasıdır (/api/v1/search ve /explain).
+   - YENİ VERİ MODELİ UYUMU:
+     * "POST /api/v1/search" gövdesinde gönderilen "filters: Map<String, Object>"
+       alanı dinamik çalıştığı için, yeni veri modelindeki 70 alanın herhangi biriyle
+       (örn: {"arac.plaka": "06ABC01", "sensor.kod": "S-102"}) sorunsuz filtrelenebilir.
+     * Bu sınıfta hiçbir kod değişikliğine gerek yoktur.
+
+2. "IndexingController.java":
+   - DURUM: %100 KALMALI.
+   - GÖREVİ: REST üzerinden doküman ekleme (POST), güncelleme (PUT), silme (DELETE),
+     toplu ekleme (POST /bulk) ve doküman adedi sayma (GET /count) işlemlerini sunar.
+   - YENİ VERİ MODELİ UYUMU:
+     * Bu sınıf girdi olarak "IndexDocumentRequest" DTO'sunu kullanır.
+     * Biz rehberin 1. Adımında "IndexDocumentRequest" sınıfını zaten modernize edip
+       3 ana alan + dinamik "structuredFields" (70 alan) yapısına geçirdiğimiz için,
+       bu Controller yeni veri modelini doğrudan ve hatasız olarak kabul eder.
+
+--------------------------------------------------------------------------------
+B) HANGİ CLASS KESİNLİKLE SİLİNMELİDİR?:
+--------------------------------------------------------------------------------
+-> "SimulationController.java":
+   - DURUM: KESİNLİKLE SİLİNMELİDİR (Canlı Ortamda Gereksizdir).
+   - NEDEN?:
+     1. Bu sınıf canlı üretim ortamı (production) için DEĞİL, geliştirme aşamasında
+        sunucu içinde yapay bir Kafka üreticisi (simulation) koşturup kuyruğa test
+        mesajı basmak için yazılmıştır.
+     2. Canlı ortamda dışarıya açık bir "simülasyon başlat / durdur" endpoint'i
+        bulunması ciddi bir güvenlik ve veri kirliliği açığıdır.
+     3. Kodun arkasındaki "KafkaSimulationProducer" sınıfı eski veri şablonuna
+        ("olaylar.json") bağımlıdır; senin 70 alanlı yeni veri modelini desteklemez.
+   - YAPILACAK İŞLEM:
+     * "SimulationController.java" PROJEDEN SİLİNMELİDİR.
+     * Arkasındaki "service/KafkaSimulationProducer.java" da silinmelidir.
+
+--------------------------------------------------------------------------------
+C) HANGİ CLASS'LAR DÜZELTİLMELİ VEYA KOŞULLU SİLİNMELİ?:
+--------------------------------------------------------------------------------
+1. "DataIngestionController.java":
+   - DURUM: KOŞULLU (İhtiyaca Göre Düzenlenecek veya Silinecek).
+   - ANALİZ:
+     * BU CLASS NE YAPAR?: Sunucu diskindeki bir JSON dosyasını (örn: data.json) okuyup
+       topluca OpenSearch'e basar veya "POST /bulk-json" ile gelen ham JSON metnini aktarır.
+     
+     * SENARYO 1 (Veriler SADECE Kafka veya IndexingController /bulk ile Gelecekse):
+       -> BU SINIF GEREKSİZDİR, SİLİNEBİLİR!
+       Eğer diskten JSON dosyası okuyup aktarma yapmayacaksanız, hem bu controller hem
+       de arkasındaki "DataIngestionService.java" silinebilir.
+
+     * SENARYO 2 (İlk Kurulumda Toplu JSON Yüklemek İçin Tutulacaksa):
+       -> KALACAK, ANCAK ŞU ALANLAR ÇIKARILMALI / DÜZELTİLMELİDİR:
+       a) Eski "/api/v1/olaylar" rotası kaldırılmalıdır. Sınıf başındaki:
+          @RequestMapping({"/api/v1/data", "/api/v1/olaylar"})
+          ifadesi sadece:
+          @RequestMapping("/api/v1/data") yapılmalıdır.
+       b) Bu controller'ın arkasındaki "DataIngestionService" içinde eski modele ait
+          olan "birim", "adres", "shortText", "longText" gibi statik alan okumaları
+          kaldırılmalı; yeni modelin 70 alanı dinamik Map ("structuredFields") olarak
+          okunmalıdır.
+
+2. "RootController.java":
+   - DURUM: KALABİLİR (Ufak temizlik yapılarak).
+   - NERELER DÜZELTİLECEK?:
+     İçerisindeki endpoint haritasında eski veya silinen sınıflara ait yollar vardır.
+     Şu 3 satır bu sınıftan ÇIKARILMALIDIR:
+     - "olaylarImport", "/api/v1/olaylar/import"  --> ÇIKARILACAK (Eski model adı)
+     - "olaylarMeta", "/api/v1/olaylar/meta"      --> ÇIKARILACAK (Eski model adı)
+     - "simulation", "/api/v1/simulation/kafka/status" --> ÇIKARILACAK (Simülasyon silindiği için)
+
+--------------------------------------------------------------------------------
+D) CONTROLLER DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++------------------------------+------------+-------------------------------------------+
+| Sınıf Adı                    | Durum      | Gerekçe / Yapılacak İşlem                 |
++------------------------------+------------+-------------------------------------------+
+| SearchController.java        | KALACAK    | Ana arama endpoint'i, yeni modele %100 uyumlu |
+| IndexingController.java      | KALACAK    | Ana indeksleme endpoint'i, yeni modele uyumlu |
+| SimulationController.java    | SİLİNECEK  | Canlıda sahte veri simülasyonu tutulmaz   |
+| DataIngestionController.java | KOŞULLU    | Diskten JSON okunmayacaksa silinir,       |
+|                              |            | kalırsa "/olaylar" eski yolları temizlenir|
+| RootController.java          | DÜZELTİLİR | İçindeki "/olaylar" ve simulation silinir |
++------------------------------+------------+-------------------------------------------+
+
+Net Kural:
+Canlı üretim ortamında temiz bir mimari için:
+- 1 Sınıf KESİNLİKLE SİLİNİR ("SimulationController.java").
+- 2 Sınıf KESİNLİKLE KALIR ("SearchController.java", "IndexingController.java").
+- "RootController.java" içindeki eski linkler temizlenir.
+- "DataIngestionController.java" dosya import ihtiyacı yoksa silinir, varsa sadece "/data" olarak sadeleştirilir.
+
+================================================================================
+5. DİZİN: dto (Veri Transfer Nesneleri - Data Transfer Objects)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/dto/
+
+MEVCUT SINIFLAR:
+1. IndexDocumentRequest.java (Class)
+2. SearchResult.java (Class)
+3. SearchRequest.java (Class)
+4. SearchResponse.java (Class)
+5. HybridExplainRequest.java (Class)
+6. HybridExplainResponse.java (Record)
+7. ErrorResponse.java (Class)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDE KOMPLE SİLİNECEK BİR CLASS VAR MI?:
+--------------------------------------------------------------------------------
+-> CEVAP: HAYIR! 7 SINIFIN TAMAMI KALMALIDIR.
+   Çünkü her bir sınıf REST API'nin giriş ve çıkış sözleşmesini (contract) oluşturur.
+   Ancak bu sınıfların BAZILARININ İÇİNDEKİ ALANLARDA (field) yeni veri modeline
+   göre temizlik ve sadeleştirme yapılmalıdır.
+
+--------------------------------------------------------------------------------
+B) YENİ VERİ MODELİNE (70+ ALAN) GÖRE HANGİ ALANLAR KALACAK / ÇIKARILACAK?:
+--------------------------------------------------------------------------------
+
+1. "IndexDocumentRequest.java" (Doküman İndeksleme İstek DTO'su):
+   --------------------------------------------------------------
+   * KESİNLİKLE KALACAK ÇEKİRDEK ALANLAR (4 Temel Alan):
+     - "id" (@NotBlank): Dokümanın tekil kimliği.
+     - "type" (@NotBlank): Dokümanın tipi/kategorisi (örn: "TESİS", "RADAR", "GÖREV").
+     - "title": Dokümanın görünen başlığı.
+     - "searchText": 70 alanın birleşiminden oluşturulan, BGE-M3'e gidecek zengin metin.
+     - "indexName": Hedef indeks adı (opsiyonel).
+     - "structuredFields": Map<String, Object> --> YENİ 70 ALANIN GİRECEĞİ YERDİR!
+
+   * ESKİ STATİK MODEL MODELİNDEN KALAN VE ÇIKARILABİLECEK ALANLAR (6 Alan):
+     - "shortText"
+     - "longText"
+     - "birim"
+     - "adres"
+     - "tarih"
+     - "konum"
+     -> NE YAPILMALI?: Yeni veri modelinizde "birim", "adres" gibi özel alanlar yoksa
+        ve 70 alan tamamen değişken/hiyerarşik ise, bu 6 alan DTO sınıfından tamamen
+        ÇIKARILMALIDIR. Bu alanlar artık "structuredFields" içine taşınmalıdır.
+        (Böylece DTO 3 ana alan + structuredFields olarak tertemiz kalır).
+
+2. "SearchResult.java" (Arama Yanıt Doküman DTO'su):
+   -------------------------------------------------
+   * KESİNLİKLE KALACAK ÇEKİRDEK ALANLAR:
+     - "id", "type", "title", "searchText"
+     - "score": Arama motorunun hesapladığı alaka puanı (BM25 veya Kosinüs skoru).
+     - "createdAt", "updatedAt": Zaman damgaları.
+     - "structuredFields": OpenSearch'ten dönen 70 dinamik alanın istemciye aktarılacağı harita.
+     - "metadata": Ek serbest bilgiler.
+
+   * ESKİ STATİK MODELDEN KALAN VE ÇIKARILABİLECEK ALANLAR (6 Alan):
+     - "shortText", "longText", "birim", "adres", "tarih", "konum"
+     -> NE YAPILMALI?: OpenSearchAdapter zaten temel alanlar dışındaki her şeyi
+        "structuredFields" içerisine doldurmaktadır. Dolayısıyla "SearchResult"
+        içindeki bu 6 statik alan silinirse, API yanıtları şişmez ve istemciye
+        tertemiz bir JSON döner.
+
+3. "SearchRequest.java" (Arama İstek DTO'su):
+   -----------------------------------------
+   * DURUM: %100 UYUMLUDUR, HİÇBİR ALAN ÇIKARILMAZ!
+   * YENİ MODELLE ÇALIŞMASI:
+     İçerisinde "filters: Map<String, Object>" haritası bulunur. İstemci yeni 70 alanın
+     herhangi birini buraya yazarak filtreleyebilir:
+     Örnek filtre: {"radar.menzil": 150, "durum": "AKTIF", "bolge": "KUZEY"}
+     Bu yapı OpenSearchAdapter'a doğrudan aktarılır.
+
+4. "SearchResponse.java" (Arama Sonuç Listesi DTO'su):
+   ----------------------------------------------------
+   * DURUM: %100 UYUMLUDUR, DOKUNULMAZ.
+   * Alanlar: "results (List<SearchResult>)", "totalHits", "tookMs", "searchType".
+
+5. "HybridExplainRequest.java" & "HybridExplainResponse.java":
+   ----------------------------------------------------------
+   * DURUM: %100 UYUMLUDUR, DOKUNULMAZ.
+   * Hibrit arama analizini (BM25 + Dense Vektör + RRF + BGE-Reranker) şeffafça
+     açıklayan gelişmiş DTO'lardır.
+
+6. "ErrorResponse.java":
+   ---------------------
+   * DURUM: %100 UYUMLUDUR, DOKUNULMAZ.
+   * Standart hata yapısıdır (status, error, message, timestamp).
+
+--------------------------------------------------------------------------------
+C) DTO DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++--------------------------+-----------+----------------------------------------+
+| Sınıf Adı                | Durum     | Yapılacak İşlem / Alan Temizliği       |
++--------------------------+-----------+----------------------------------------+
+| IndexDocumentRequest     | KALACAK   | 6 eski alan (birim, adres vb.) silinir;|
+|                          |           | 3 ana alan + structuredFields kalır    |
+| SearchResult             | KALACAK   | 6 eski alan silinir; sonuçlar          |
+|                          |           | structuredFields üzerinden sunulur     |
+| SearchRequest            | KALACAK   | Değişiklik yok (filters haritası hazır)|
+| SearchResponse           | KALACAK   | Değişiklik yok                         |
+| HybridExplainRequest     | KALACAK   | Değişiklik yok                         |
+| HybridExplainResponse    | KALACAK   | Değişiklik yok                         |
+| ErrorResponse            | KALACAK   | Değişiklik yok                         |
++--------------------------+-----------+----------------------------------------+
+
+Net Kural:
+DTO dizininde hiçbir sınıf SİLİNMEZ.
+Sadece "IndexDocumentRequest" ve "SearchResult" sınıfları içindeki 6 adet eski statik alan
+(shortText, longText, birim, adres, tarih, konum) temizlenir; yerini 70 alanı taşıyan
+"structuredFields" haritasına bırakır.
+
+================================================================================
+6. DİZİN: exception (Özel İstisnalar ve Global Hata Yöneticisi)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/exception/
+
+MEVCUT SINIFLAR:
+1. GlobalExceptionHandler.java (Class)
+2. SearchServiceException.java (Class)
+3. OpenSearchUnavailableException.java (Class)
+4. EmbeddingUnavailableException.java (Class)
+5. DocumentNotFoundException.java (Class)
+6. InvalidSearchEventException.java (Class)
+7. ErrorResponse.java (Class - @Deprecated)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDEKİ HER CLASS NE İŞE YARIYOR?:
+--------------------------------------------------------------------------------
+
+1. "GlobalExceptionHandler.java":
+   - NE İŞE YARAR?: Spring Boot'un "@RestControllerAdvice" anotasyonu ile çalışan
+     merkezi hata yakalama kalesidir. Tüm controller'larda fırlatılan istisnaları
+     tek bir yerde yakalar ve istemciye stack trace sızdırmadan temiz bir JSON döner:
+     * DTO validasyon hatalarını yakalar -> 400 Bad Request
+     * DocumentNotFoundException yakalar -> 404 Not Found
+     * OpenSearch / Embedding bağlantı kopmalarını yakalar -> 503 Service Unavailable
+     * Beklenmeyen kod hatalarını yakalar -> 500 Internal Server Error
+
+2. "SearchServiceException.java":
+   - NE İŞE YARAR?: Projedeki tüm arama ve indeksleme çalışma zamanı hatalarının
+     ana (base) sınıfıdır ("extends RuntimeException"). Diğer tüm özel istisnalar
+     bu sınıftan türer.
+
+3. "OpenSearchUnavailableException.java":
+   - NE İŞE YARAR?: OpenSearch sunucusu çöktüğünde, Kubernetes pod'u yeniden başlarken
+     ağ koptuğunda veya indeksleme/arama zaman aşımına uğradığında fırlatılır.
+     GlobalExceptionHandler bunu yakalayıp HTTP 503 döner.
+
+4. "EmbeddingUnavailableException.java":
+   - NE İŞE YARAR?: Airgap ortamındaki yerel BGE-M3 model sunucuna ulaşılamadığında,
+     API anahtarı geçersiz olduğunda veya model istekleri zaman aşımına uğradığında
+     fırlatılır. GlobalExceptionHandler bunu yakalayıp HTTP 503 döner.
+
+5. "DocumentNotFoundException.java":
+   - NE İŞE YARAR?: İstemci var olmayan bir doküman ID'sini güncellemek, silmek veya
+     görüntülemek istediğinde fırlatılır. HTTP 404 (Not Found) üretir.
+
+6. "InvalidSearchEventException.java":
+   - NE İŞE YARAR?: Kafka kuyruğundan gelen mesajın JSON formatı bozuk olduğunda
+     veya zorunlu alanlar eksik olduğunda fırlatılır. En kritik özelliği: Spring Kafka
+     hata yöneticisine (DefaultErrorHandler) "Bu mesaj kalıcı olarak bozuktur,
+     boşuna tekrar deneme (retry yapma), doğrudan Dead-Letter Topic'e (DLT) fırlat!"
+     sinyali vermesidir.
+
+7. "ErrorResponse.java" (exception paketi içindeki):
+   - NE İŞE YARAR?: Üzerinde "@Deprecated" etiketi bulunan eski bir sınıftır.
+     "com.example.semantic_search.dto.ErrorResponse" sınıfını miras alarak geriye
+     dönük uyumluluk sağlamak amacıyla geçici olarak bırakılmıştır.
+
+--------------------------------------------------------------------------------
+B) HANGİ CLASS KESİNLİKLE SİLİNMELİDİR? (Gereksiz / Dead Code):
+--------------------------------------------------------------------------------
+-> "src/main/java/com/example/semantic_search/exception/ErrorResponse.java":
+   - DURUM: KESİNLİKLE SİLİNMELİDİR!
+   - NEDEN?:
+     1. Projede zaten "com.example.semantic_search.dto.ErrorResponse" adında gerçek
+        ve aktif olarak kullanılan DTO sınıfı vardır.
+     2. "GlobalExceptionHandler" dahil tüm sınıflar zaten "dto.ErrorResponse" sınıfını
+        import edip kullanmaktadır.
+     3. "exception/ErrorResponse.java" ise sadece "@Deprecated" olarak duran, hiçbir
+        yerde çağrılmayan mükerrer (duplicate) artık bir koddur.
+
+--------------------------------------------------------------------------------
+C) HANGİ CLASS'LAR KESİNLİKLE KALMALIDIR?:
+--------------------------------------------------------------------------------
+1. "GlobalExceptionHandler.java": %100 KALMALI (Merkezi hata yöneticisi).
+2. "SearchServiceException.java": %100 KALMALI (Tüm arama istisnalarının atası).
+3. "OpenSearchUnavailableException.java": %100 KALMALI (OpenSearch arıza koruması).
+4. "EmbeddingUnavailableException.java": %100 KALMALI (Model sunucu arıza koruması).
+5. "DocumentNotFoundException.java": %100 KALMALI (404 doküman bulunamadı kontrolü).
+
+--------------------------------------------------------------------------------
+D) HANGİ CLASS KOŞULLUDUR?:
+--------------------------------------------------------------------------------
+-> "InvalidSearchEventException.java":
+   - EĞER KAFKA KULLANIYORSAN: %100 KALMALIDIR (Bozuk mesajların DLT'ye gitmesi için şarttır).
+   - EĞER KAFKA KULLANMIYORSAN (Sadece REST ile indeksleme varsa): SİLİNEBİLİR.
+
+--------------------------------------------------------------------------------
+E) EXCEPTION DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++------------------------------------+-----------+----------------------------------------+
+| Sınıf Adı                          | Durum     | Gerekçe / Yapılacak İşlem              |
++------------------------------------+-----------+----------------------------------------+
+| ErrorResponse.java                 | SİLİNECEK | @Deprecated mükerrer sınıftır, DTO'su var|
+| GlobalExceptionHandler.java        | KALACAK   | Merkezi REST hata yönetim motoru       |
+| SearchServiceException.java        | KALACAK   | Temel arama çalışma zamanı istisnası   |
+| OpenSearchUnavailableException.java| KALACAK   | OpenSearch bağlantı arıza istisnası    |
+| EmbeddingUnavailableException.java | KALACAK   | Model sunucusu bağlantı arıza istisnası|
+| DocumentNotFoundException.java     | KALACAK   | Doküman bulunamadı (404) istisnası     |
+| InvalidSearchEventException.java   | KOŞULLU   | Kafka kuyruklarında DLT için gereklidir|
++------------------------------------+-----------+----------------------------------------+
+
+Net Kural:
+Dizinde toplam 7 sınıf vardır.
+- 1 Sınıf KESİNLİKLE SİLİNİR ("exception/ErrorResponse.java").
+- 5 Sınıf KESİNLİKLE KALIR (GlobalExceptionHandler ve temel istisnalar).
+- 1 Sınıf KOŞULLUDUR (InvalidSearchEventException - Kafka varsa kalır).
+
+================================================================================
+7. DİZİN: kafka (Kafka Mesaj Tüketimi, Eşleme ve Olay Boru Hattı)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/kafka/
+
+MEVCUT ÖĞELER (8 Java Sınıfı + 1 Markdown Dokümanı):
+1. KafkaIndexingListener.java (Class)
+2. SearchEventMapper.java (Interface)
+3. JsonSearchEventMapper.java (Class)
+4. SearchIndexingEvent.java (Record - Mükerrer)
+5. KafkaIndexingConfiguration.java (Class - @Deprecated)
+6. KafkaIndexingProperties.java (Class - @Deprecated)
+7. SearchEventProcessor.java (Class - @Deprecated)
+8. InvalidSearchEventException.java (Class - @Deprecated)
+9. KAFKA_AKTIFLESIRKEN_YAPILACAKLAR.md (Dokümantasyon Dosyası)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDEKİ HER CLASS NE İŞE YARIYOR?:
+--------------------------------------------------------------------------------
+
+1. "KafkaIndexingListener.java":
+   - NE İŞE YARAR?: Spring Kafka'nın "@KafkaListener" anotasyonu ile yapılandırılan
+     ana mesaj tüketicisidir (Consumer). "application.yml" içinde tanımlanan topic'leri
+     dinler. Gelen mesajı alır almaz "SearchEventProcessor" servisine iletir ve
+     işlem sonucuna göre Micrometer metrik sayaçlarını (başarı/hata) artırır.
+
+2. "SearchEventMapper.java" (Arayüz / Interface):
+   - NE İŞE YARAR?: Kafka'dan gelen ham String/JSON iletisini projenin anlayacağı
+     "IndexDocumentRequest" DTO'suna çeviren sözleşmedir ("read" ve "mapDocument" metotları).
+
+3. "JsonSearchEventMapper.java":
+   - NE İŞE YARAR?: "SearchEventMapper"ın asıl çalışan motorudur.
+     * Hem zarflı (envelope: {eventId, eventType, data}) hem de düz JSON mesajlarını tanır.
+     * Yeni 70 alanınızı "RESERVED_FIELDS" süzgecinden geçirerek ayıklar ve "structuredFields"
+       haritasına doldurur.
+     * Dokümanın başlık, tip ve açıklama alanlarını birleştirerek BGE-M3 modeline gidecek
+       zengin "searchText" alanını inşa eder.
+
+4. "SearchIndexingEvent.java" (kafka paketi içindeki):
+   - NE İŞE YARAR?: Kafka'dan gelen olayın temel zarf yapısını (eventId, eventType,
+     documentId, version, data) temsil eden bir Java Record kaydıdır.
+
+5-8. "@Deprecated" Köprü Sınıfları (4 Adet):
+   - "KafkaIndexingConfiguration.java"
+   - "KafkaIndexingProperties.java"
+   - "SearchEventProcessor.java"
+   - "InvalidSearchEventException.java"
+   - NE İŞE YARARLAR?: Proje geçmişinde yapılan mimari refactoring sırasında bu sınıflar
+     sırasıyla "config", "service" ve "exception" paketlerine taşınmıştır. Eski yerlerinde
+     yalnızca 10-15 satırlık içi boş "@Deprecated" yönlendirme sınıfları olarak bırakılmıştır.
+
+9. "KAFKA_AKTIFLESIRKEN_YAPILACAKLAR.md":
+   - Java kodu değildir; Kafka açılırken yapılması gerekenleri anlatan bilgi notudur.
+
+--------------------------------------------------------------------------------
+B) HANGİ CLASS'LAR KESİNLİKLE SİLİNMELİDİR? (TAM 5 ADET ARTIK / DEAD CODE!):
+--------------------------------------------------------------------------------
+Bu dizin projenin en çok artık (dead code) barındıran yeridir.
+Şu 5 SINIF KESİNLİKLE SİLİNMELİDİR:
+
+1. "KafkaIndexingConfiguration.java":
+   - SİLİNECEK! Gerçek hali zaten "config/KafkaIndexingConfiguration.java"dadır.
+
+2. "KafkaIndexingProperties.java":
+   - SİLİNECEK! Gerçek hali zaten "config/KafkaIndexingProperties.java"dadır.
+
+3. "SearchEventProcessor.java":
+   - SİLİNECEK! Gerçek hali zaten "service/SearchEventProcessor.java"dadır.
+
+4. "InvalidSearchEventException.java":
+   - SİLİNECEK! Gerçek hali zaten "exception/InvalidSearchEventException.java"dadır.
+
+5. "SearchIndexingEvent.java" (kafka paketi içindeki):
+   - SİLİNECEK! Çünkü bu sınıfın aynısı "model/SearchIndexingEvent.java" içinde zaten
+     vardır. "SearchEventMapper" ve "JsonSearchEventMapper" dahil tüm sınıflar zaten
+     "model.SearchIndexingEvent" import etmektedir. "kafka" altındaki kopya ölü koddur.
+
+--------------------------------------------------------------------------------
+C) HANGİ CLASS'LAR KALMALIDIR? (3 GERÇEK MOTOR SINIFI):
+--------------------------------------------------------------------------------
+Eğer projede Kafka kullanılacaksa sadece şu 3 sınıf KESİNLİKLE KALMALIDIR:
+1. "KafkaIndexingListener.java" (Kafka dinleyicisi)
+2. "SearchEventMapper.java" (Eşleyici arayüzü)
+3. "JsonSearchEventMapper.java" (JSON ayrıştırıcı ve 70 alan işleyici)
+
+--------------------------------------------------------------------------------
+D) KOŞULLU DURUM (KAFKA HİÇ KULLANILMIYORSA):
+--------------------------------------------------------------------------------
+- EĞER KAFKA KULLANMIYORSANIZ (Veriler sadece REST API veya script ile yükleniyorsa):
+  * Bu dizinin ("kafka/") TAMAMI ve "config" altındaki 2 Kafka sınıfı silinebilir!
+  * Kod silmek istemiyorsanız "application.yml" içinde "search.kafka.enabled: false"
+    yapılması yeterlidir.
+
+--------------------------------------------------------------------------------
+E) KAFKA DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++-------------------------------+------------+------------------------------------------+
+| Sınıf / Dosya Adı             | Durum      | Gerekçe / Yapılacak İşlem                |
++-------------------------------+------------+------------------------------------------+
+| KafkaIndexingListener.java    | KALACAK    | Ana Kafka mesaj dinleyici bileşeni       |
+| SearchEventMapper.java        | KALACAK    | Olay dönüştürme arayüzü                  |
+| JsonSearchEventMapper.java    | KALACAK    | 70 alanı ayrıştıran ana dönüştürücü motor |
+| SearchIndexingEvent.java      | SİLİNECEK  | "model" paketinde zaten var (mükerrer)   |
+| KafkaIndexingConfiguration    | SİLİNECEK  | @Deprecated, "config"e taşındı           |
+| KafkaIndexingProperties       | SİLİNECEK  | @Deprecated, "config"e taşındı           |
+| SearchEventProcessor          | SİLİNECEK  | @Deprecated, "service"e taşındı          |
+| InvalidSearchEventException   | SİLİNECEK  | @Deprecated, "exception"a taşındı        |
+| KAFKA_AKTIFLESIRKEN_...md     | TAŞINABİLİR| Kök dizine taşınabilir veya silinebilir  |
++-------------------------------+------------+------------------------------------------+
+
+Net Kural:
+Bu dizindeki 8 Java sınıfından 5 TANESİ KESİNLİKLE SİLİNMELİDİR.
+Temizlik bittiğinde bu dizinde sadece 3 TANE gerçek sınıf kalmalıdır:
+1. KafkaIndexingListener.java
+2. SearchEventMapper.java
+3. JsonSearchEventMapper.java
+
+================================================================================
+8. DİZİN: model (Veri Modelleri ve Varlıklar)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/model/
+
+MEVCUT SINIFLAR:
+1. SearchDocument.java (Class)
+2. IndexingState.java (Class)
+3. SearchType.java (Enum)
+4. IndexingStatus.java (Enum)
+5. SearchIndexingEvent.java (Record)
+6. SearchQueryLog.java (Class)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDEKİ HER CLASS NE İŞE YARIYOR?:
+--------------------------------------------------------------------------------
+
+1. "SearchDocument.java":
+   - NE İŞE YARAR?: OpenSearch'e fiziksel olarak indekslenen ve arama yapıldığında
+     bellekte dönen ana doküman modelidir. Dokümanın ID'sini, başlığını, BGE-M3'ten
+     üretilen 1024 boyutlu yoğun vektörünü (float[] embedding) ve zaman damgalarını taşır.
+
+2. "IndexingState.java":
+   - NE İŞE YARAR?: Her dokümanın yaşam döngüsünü (PENDING, INDEXED, FAILED, DELETED),
+     en son hangi Kafka olay versiyonuyla güncellendiğini ve metnin SHA-256 hash'ini
+     ("searchTextHash") takip eden operasyonel modeldir.
+
+3. "SearchType.java" (Enum):
+   - NE İŞE YARAR?: Arama türlerini belirler: BM25 (Metin), SEMANTIC (Vektör), HYBRID (RRF Füzyon).
+
+4. "IndexingStatus.java" (Enum):
+   - NE İŞE YARAR?: İndeksleme durumlarını temsil eder: PENDING, INDEXED, FAILED, DELETED.
+
+5. "SearchIndexingEvent.java" (Record):
+   - NE İŞE YARAR?: Kafka'dan gelen olay zarfı modelidir (eventId, eventType, documentId, version, data).
+     NOT: Projede bu sınıfın gerçeği burasıdır; "kafka" paketindeki kopya silinmelidir.
+
+6. "SearchQueryLog.java":
+   - NE İŞE YARAR?: Yapılan hibrit aramaların metriklerini (BM25 süresi, vektör süresi,
+     katsayılar, kaç sonuç döndüğü) denetim (audit) amacıyla kaydeden log modelidir.
+
+--------------------------------------------------------------------------------
+B) BU DİZİNDE SİLİNECEK BİR CLASS VAR MI?:
+--------------------------------------------------------------------------------
+-> CEVAP: HAYIR! 6 SINIFIN TAMAMI KALMALIDIR.
+   Hiçbiri silinmez; ancak "SearchDocument.java" içinde yeni 70 alanlı model için
+   alan temizliği yapılmalıdır.
+
+--------------------------------------------------------------------------------
+C) YENİ VERİ MODELİNE (70+ ALAN) GÖRE NERELER VE NASIL DEĞİŞECEK?:
+--------------------------------------------------------------------------------
+-> "SearchDocument.java" Alan Sadeleştirmesi:
+   * KESİNLİKLE KALACAK ÇEKİRDEK ALANLAR:
+     - id, indexName, type, title, searchText, embedding (float[]),
+       structuredFields (Map<String, Object>), metadata, createdAt, updatedAt.
+   
+   * ÇIKARILMASI GEREKEN 6 ESKİ ALAN:
+     - "shortText", "longText", "birim", "adres", "tarih", "konum"
+   
+   * NASIL YAPILACAK?:
+     Yeni modelinizde bu özel alanlar bulunmadığından ve 70 yeni alan tamamen dinamik
+     olduğundan:
+     1. SearchDocument sınıfından bu 6 değişken ve getter/setter'ları silinir.
+     2. SearchDocument.Builder sınıfından ".birim()", ".adres()" metotları silinir.
+     3. 70 alanın tamamı doğrudan "structuredFields" haritası üzerinden taşınır.
+     (Böylece entity 70 alan için şişmez, tertemiz ve esnek kalır).
+
+--------------------------------------------------------------------------------
+D) MODEL DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++--------------------------+---------+------------------------------------------+
+| Sınıf Adı                | Durum   | Yapılacak İşlem                          |
++--------------------------+---------+------------------------------------------+
+| SearchDocument.java      | KALACAK | 6 eski alan silinir; 70 alan             |
+|                          |         | structuredFields'e devredilir            |
+| IndexingState.java       | KALACAK | Değişiklik yok (idempotency için şart)   |
+| SearchType.java          | KALACAK | Değişiklik yok                           |
+| IndexingStatus.java      | KALACAK | Değişiklik yok                           |
+| SearchIndexingEvent.java | KALACAK | Değişiklik yok (orijinal sınıf budur)    |
+| SearchQueryLog.java      | KALACAK | Değişiklik yok                           |
++--------------------------+---------+------------------------------------------+
+
+================================================================================
+9. DİZİN: service (İş Mantığı, İndeksleme, Arama ve Model Motoru)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/service/
+
+MEVCUT SINIFLAR:
+1. IndexingService.java (Class)
+2. SearchQueryService.java (Class)
+3. RerankingService.java (Interface)
+4. TeiRerankingService.java (Class)
+5. SearchEventProcessor.java (Class)
+6. SearchQueryLogService.java (Class)
+7. DataIngestionService.java (Class)
+8. KafkaSimulationProducer.java (Class)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDEKİ HER CLASS NE İŞE YARIYOR?:
+--------------------------------------------------------------------------------
+
+1. "IndexingService.java":
+   - NE İŞE YARAR?: Tüm indeksleme pipeline'ının kalbidir. Doküman ekleme, güncelleme,
+     silme ve toplu indeksleme (bulk) işlerini yönetir. Gelen metin için BGE-M3 modeline
+     gidip vektör üretir, SHA-256 hash'i ile gereksiz hesaplamaları atlar ve OpenSearch'e yazar.
+
+2. "SearchQueryService.java":
+   - NE İŞE YARAR?: Arama sürecinin ana orkestratörüdür. BM25 metin aramasını ve
+     yoğun vektör aramasını paralel çalıştırır, RRF veya Normalize Skor füzyonu ile
+     sonuçları birleştirir ve ardından Reranker servisine gönderir.
+
+3. "RerankingService.java" (Arayüz) & "TeiRerankingService.java" (Sınıf):
+   - NE İŞE YARAR?: Airgap ağındaki yerel model sunucusunda koşan Cross-Encoder
+     (BAAI/bge-reranker-v2-m3) servisine "POST /rerank" HTTP isteği atar.
+     Aday dokümanları derin anlamsal analize tabi tutarak nihai en doğru sıraya dizer.
+     Ulaşılamazsa aramayı çökertmez; RRF sıralamasına geri düşer (graceful fallback).
+
+4. "SearchEventProcessor.java":
+   - NE İŞE YARAR?: Kafka'dan gelen mesajları karşılar; zarf doğrulaması, in-memory state
+     üzerinden eskilik (stale event) kontrolü yapar ve uygunsa IndexingService'e aktarır.
+
+5. "SearchQueryLogService.java":
+   - NE İŞE YARAR?: Çalıştırılan her aramanın süresini ve aşama puanlarını hafızadaki
+     SearchQueryLogRepository'ye asenkron olarak yazar.
+
+6. "DataIngestionService.java":
+   - NE İŞE YARAR?: Sunucu diskindeki JSON dosyalarını okuyarak OpenSearch'e aktaran ETL servisidir.
+
+7. "KafkaSimulationProducer.java":
+   - NE İŞE YARAR?: Test için Kafka'ya yapay olaylar gönderen simülasyon üreticisidir.
+
+--------------------------------------------------------------------------------
+B) HANGİ CLASS KESİNLİKLE SİLİNMELİDİR?:
+--------------------------------------------------------------------------------
+-> "KafkaSimulationProducer.java":
+   - DURUM: KESİNLİKLE SİLİNMELİDİR!
+   - NEDEN?:
+     1. Canlı üretim ortamında simülatör olmaz.
+     2. Kod eski "olaylar.json" yapısına göbekten bağlıdır; yeni 70 alanlı modelle çalışmaz.
+     3. "SimulationController" ile beraber bu servis de tamamen projeden kaldırılmalıdır.
+
+--------------------------------------------------------------------------------
+C) HANGİ CLASS KOŞULLUDUR?:
+--------------------------------------------------------------------------------
+-> "DataIngestionService.java":
+   - Eğer diskten JSON dosyası okuyup OpenSearch'e basma ihtiyacınız YOKSA: SİLİNEBİLİR.
+   - Eğer ilk kurulumda toplu veri yüklemek için tutulacaksa: KALIR; ancak içindeki
+     eski "birim", "adres" okumaları silinip dinamik "structuredFields" map'ine çevrilmelidir.
+
+--------------------------------------------------------------------------------
+D) KALACAK SINIFLARDA NERELER VE NASIL DEĞİŞECEK?:
+--------------------------------------------------------------------------------
+
+1. "IndexingService.java":
+   - NASIL DEĞİŞECEK?:
+     Rehberimizin 3.3. Adımında anlattığımız gibi:
+     * "indexDocument", "bulkIndex" ve "updateDocument" metotlarındaki
+       "SearchDocument.builder()" çağrılarından eski alanlar (".birim(request.getBirim())",
+       ".adres(request.getAdres())") SİLİNMELİDİR.
+     * Yerine ".structuredFields(request.getStructuredFields())" eklenmelidir.
+     * SHA-256 hash kontrolü ("searchTextHash") sayesinde metin değişmediyse Airgap
+       BGE-M3 modeline gereksiz istek atılması engellenmelidir.
+
+2. "TeiRerankingService.java":
+   - NASIL DEĞİŞECEK?:
+     * Airgap model sunucun için "application.yml" konfigürasyonundan endpoint, API anahtarı
+       ve model adını okuduğundan emin olunmalıdır:
+       search:
+         reranking:
+           enabled: true
+           provider: tei
+           endpoint: ${RERANKER_ENDPOINT:http://yerel-model-sunucu:8082}
+           model: BAAI/bge-reranker-v2-m3
+           api-key: ${RERANKER_API_KEY:senin_api_anahtarin}
+           api-key-header: Authorization # veya X-API-Key
+
+3. "SearchEventProcessor.java":
+   - NASIL DEĞİŞECEK?:
+     * Rehberimizin 3.1. Adımında anlattığımız "Amnesia" (Bellek Kaybı) ve "Stale Event"
+       kontrolleri korunmalıdır.
+
+4. "SearchQueryService.java" (Standart Arama ile Reranker Entegrasyonu):
+   - Koddaki Durum:
+     Mevcut kodda Cross-Encoder Reranker sadece "POST /api/v1/search/explain" endpoint'inde
+     çalışmaktadır. Standart "POST /api/v1/search" metodunda ise OpenSearch'ün kendi RRF
+     füzyon sıralaması dönmektedir.
+   - Nasıl Değişecek?:
+     Eğer canlı arama ekranında her kullanıcı sorgusunda en iyi 10-20 sonucun BGE-Reranker
+     tarafından derin analize tabi tutularak yeniden sıralanması isteniyorsa;
+     SearchQueryService içindeki "search()" metodunda HYBRID dalına:
+     "List<SearchResult> rerankedResults = rerankingService.filter(RerankingService::isAvailable)..."
+     eklenerek doğrudan Reranker sonucu dönülebilir.
+
+5. "TeiRerankingService.java" (buildDocumentText Fallback Temizliği):
+   - Koddaki Durum:
+     İçerisindeki "buildDocumentText(SearchResult doc)" metodunda dokümanın başlığı ve
+     "searchText" alanı yoksa hardcoded olarak "olay" metni dönmektedir.
+   - Nasıl Değişecek?:
+     Yeni genel veri modeline uygun olarak "olay" yerine dokümanın kendi tipi
+     "(doc.getType() != null ? doc.getType() : "dokuman")" veya ID'si dönülmelidir.
+
+
+--------------------------------------------------------------------------------
+E) SERVICE DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++-----------------------------+-----------+-------------------------------------+
+| Sınıf Adı                   | Durum     | Yapılacak İşlem                     |
++-----------------------------+-----------+-------------------------------------+
+| KafkaSimulationProducer     | SİLİNECEK | Canlıda sahte veri simülatörü olmaz |
+| DataIngestionService        | KOŞULLU   | Dosyadan import yoksa silinir;      |
+|                             |           | varsa eski alanlar temizlenir       |
+| IndexingService.java        | KALACAK   | Builder'dan eski alanlar silinir,   |
+|                             |           | structuredFields bağlanır           |
+| SearchQueryService.java     | KALACAK   | Değişiklik yok (Hibrit orkestratör) |
+| RerankingService.java       | KALACAK   | Değişiklik yok                      |
+| TeiRerankingService.java    | KALACAK   | Airgap yerel API Key ile yapılandır |
+| SearchEventProcessor.java   | KALACAK   | Kafka yönlendirme beyni             |
+| SearchQueryLogService.java  | KALACAK   | Arama loglama servisi               |
++-----------------------------+-----------+-------------------------------------+
+
+Net Kural:
+Service dizininde:
+- 1 Sınıf KESİNLİKLE SİLİNİR ("KafkaSimulationProducer.java").
+- 1 Sınıf KOŞULLUDUR ("DataIngestionService.java").
+- Kalan 6 sınıf KESİNLİKLE KALIR ve yeni modelle entegre edilir.
+
+================================================================================
+10. DİZİN: repository (Bellek İçi Durum ve Log Depoları)
+================================================================================
+Klasör Yolu:
+src/main/java/com/example/semantic_search/repository/
+
+MEVCUT SINIFLAR:
+1. IndexingStateRepository.java (Class)
+2. SearchQueryLogRepository.java (Class)
+
+--------------------------------------------------------------------------------
+A) BU DİZİNDEKİ HER CLASS NE İŞE YARIYOR?:
+--------------------------------------------------------------------------------
+
+1. "IndexingStateRepository.java":
+   - NE İŞE YARAR?: Harici bir PostgreSQL veritabanı ihtiyacını ortadan kaldıran,
+     dokümanların son versiyonunu, indeksleme durumunu (INDEXED/FAILED) ve SHA-256
+     özetini bellek içinde ("ConcurrentHashMap") tutan thread-safe depodur.
+     Idempotency ve sırasız olay (out-of-order) korumasını sağlar.
+
+2. "SearchQueryLogRepository.java":
+   - NE İŞE YARAR?: Kullanıcıların yaptığı aramaları, arama sürelerini ve sonuç analizlerini
+     bellek içinde ("ConcurrentHashMap") saklayan log deposudur.
+
+--------------------------------------------------------------------------------
+B) BU DİZİNDE SİLİNECEK BİR CLASS VAR MI?:
+--------------------------------------------------------------------------------
+-> CEVAP: HAYIR! 2 SINIF DA KESİNLİKLE KALMALIDIR.
+   Çünkü PostgreSQL bağımlılığı olmadığı için bu iki sınıf tüm durum takibini üstlenir.
+
+--------------------------------------------------------------------------------
+C) CANLI KUBERNETES / AIRGAP ORTAMI İÇİN NERELER VE NASIL OPTİMİZE EDİLMELİ?:
+--------------------------------------------------------------------------------
+Bellek içinde (In-Memory) çalışan sınıflar oldukları için uzun süre ayakta kalan Pod'larda
+bellek şişmesini (OOM - Out of Memory) önlemek amacıyla şu 2 optimizasyon ŞARTTIR:
+
+1. "IndexingStateRepository.java" (24 Saatlik Bellek Temizleme):
+   - PROBLEM: Yıllarca çalışan bir podda milyonlarca doküman belleğe dolarsa RAM taşabilir.
+   - NASIL YAPILACAK?:
+     "KAFKA_24_SAAT_SIFIRLANMA_VE_DAYANIKLILIK_REHBERI.txt" dökümanında anlattığımız gibi;
+     Kafka retention süreniz 24 saat olduğundan, 24 saatten eski durum kayıtlarını
+     hafızadan silen bir temizleme metodu eklenmelidir:
+     
+     public void purgeRecordsOlderThan(Instant cutoff) {
+         storage.entrySet().removeIf(e -> e.getValue().getUpdatedAt().isBefore(cutoff));
+     }
+
+2. "SearchQueryLogRepository.java" (Maksimum Log Tavanı / Eviction Policy):
+   - PROBLEM: Her yapılan arama sınırsızca "storage" map'ine eklenirse bellek dolar.
+   - NASIL YAPILACAK?:
+     Maksimum 1.000 veya 5.000 log tutacak şekilde bir tavan sınır konmalı; tavan aşılınca
+     en eski loglar otomatik temizlenmelidir:
+     if (storage.size() > 5000) {
+         // En eski 1000 kaydı sil
+     }
+
+--------------------------------------------------------------------------------
+D) REPOSITORY DİZİNİ ÖZET TABLOSU:
+--------------------------------------------------------------------------------
++----------------------------+---------+----------------------------------------+
+| Sınıf Adı                  | Durum   | Yapılacak Optimizasyon                 |
++----------------------------+---------+----------------------------------------+
+| IndexingStateRepository    | KALACAK | OOM önlemek için 24h purge eklenmeli   |
+| SearchQueryLogRepository   | KALACAK | OOM önlemek için max log sınırı koyulmalı|
++----------------------------+---------+----------------------------------------+
+
+================================================================================
+GENEL PROJE TEMİZLİK VE OPTİMİZASYON BİLANÇOSU (ÖZET SONUÇ)
+================================================================================
+
+Tüm proje dizinleri adım adım incelendiğinde temizlik bilançosu şöyledir:
+
+1. KESİNLİKLE SİLİNECEK ARTIK / ÖLÜ KODLAR (TOPLAM 8 SINIF):
+   - client/embedding/MockEmbeddingProvider.java
+   - exception/ErrorResponse.java (@Deprecated kopya)
+   - controller/SimulationController.java (Canlıda sahte veri olmaz)
+   - service/KafkaSimulationProducer.java (Eski modele bağlı simülatör)
+   - kafka/KafkaIndexingConfiguration.java (@Deprecated kopya)
+   - kafka/KafkaIndexingProperties.java (@Deprecated kopya)
+   - kafka/SearchEventProcessor.java (@Deprecated kopya)
+   - kafka/InvalidSearchEventException.java (@Deprecated kopya)
+   - kafka/SearchIndexingEvent.java (model'dekiyle mükerrer kopya)
+
+2. SEÇİMLİK / SİLİNECEK MODEL SINIFI (1 SINIF):
+   - TeiEmbeddingProvider.java VEYA RestEmbeddingProvider.java
+     (Model sunucunun API formatına göre biri kalır, diğeri silinir).
+
+3. KOŞULLU KALACAK / SİLİNECEK SINIFLAR:
+   - DataIngestionController.java ve DataIngestionService.java (Diskten dosya import yoksa).
+   - KafkaIndexing*.java ve kafka/ klasörü (Kafka kullanılmıyorsa).
+
+4. YENİ VERİ MODELİ (70+ ALAN) İÇİN ALAN TEMİZLİĞİ YAPILACAKLAR:
+   - IndexDocumentRequest.java, SearchDocument.java, SearchResult.java sınıflarındaki
+     6 eski statik alan (shortText, longText, birim, adres, tarih, konum) temizlenir;
+     70 alan "structuredFields: Map<String, Object>" haritası üzerinden yönetilir.
+
+BU TEMİZLİK YAPILDIĞINDA:
+Proje tüm ölü kodlardan, @Deprecated yönlendirmelerden ve sahte veri üreticilerinden
+tamamen arınacak; yerel ağdaki OpenSearch ve Airgap model sunucunla %100 uyumlu,
+hafif ve endüstri standardı bir mimariye kavuşacaktır.
+================================================================================
+
+
+
+
+
+
+

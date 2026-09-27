@@ -1,0 +1,1240 @@
+================================================================================
+YENİ VERİ MODELİ ENTEGRASYON REHBERİ & MİMARİ NOTLAR
+================================================================================
+
+--------------------------------------------------------------------------------
+1. ADIM: İndeks İstek Modelinin (IndexDocumentRequest.java) Kurgulanması
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/dto/IndexDocumentRequest.java
+
+BU ADIMIN AMACI:
+Kafka'dan gelen 70'ten fazla iç içe alanı olan karmaşık JSON verisini, arama
+motorumuzun (OpenSearch) ve yapay zeka modelimizin (BGE-M3) anlayacağı standart,
+temiz ve güçlü bir Java nesnesine (DTO) dönüştürmektir.
+
+--------------------------------------------------------------------------------
+A) OLMAZSA OLMAZ 3 ALAN VE TEKNİK GEREKÇELERİ:
+--------------------------------------------------------------------------------
+1. "id" (String) - Dokümanın Benzersiz Kimliği (Primary Key):
+   - Neden Şart?:
+     a) Güncelleme (UPSERT): Aynı ID ile yeni bir kayıt geldiğinde OpenSearch
+        eski kaydı bulup günceller, mükerrer kayıt oluşmasını engeller.
+     b) Silme (DELETE): Kafka'dan silme emri geldiğinde silinecek doküman bu
+        ID ile bulunur.
+     c) Tekilleştirme & Güvenlik (Idempotency): Ağ gecikmesiyle eski versiyonlu
+        bir paket geç gelirse, sistem "Ben bu ID'nin yeni sürümünü zaten işledim"
+        diyerek veri kirliliğini önler.
+
+2. "indexName" (String) - Hedef OpenSearch İndeksi:
+   - Neden Şart?:
+     - Farklı topic'lerden gelen verileri farklı indekslere (örn: radar_indeksi,
+       ihbar_indeksi, lojistik_indeksi) yazabilmemizi sağlar.
+     - İleride silme, arşivleme ve veri ömrü (TTL) yönetimini kolaylaştırır.
+     - NOT: Ayrı ayrı indekslere yazılsa dahi, arama yapılırken "POST /*/_search"
+       veya "POST /radar,ihbar/_search" denilerek TEK BİR SORGUDAN hepsi taranabilir.
+
+3. "searchText" (String) - Yapay Zeka (Embedding) Metni:
+   - Neden Şart?:
+     - BGE-M3 gibi yapay zeka modelleri 70 tane dağınık JSON alanını, iç içe sayıları
+       ve teknik kodları tek tek anlayamaz; anlamlı bir Türkçe metin bekler.
+     - Kullanıcının arama çubuğuna yazdığı sorgularla eşleşecek metinlerin
+       (başlık, açıklama, detaylar) temiz bir şekilde birleştirilmiş halidir.
+     - 1024 boyutlu vektör bu alandaki metinden üretilir.
+
+--------------------------------------------------------------------------------
+B) BM25 (KELİME ARAMASI) İÇİN KULLANILACAK ALANLAR:
+--------------------------------------------------------------------------------
+- Kullanıcının birebir kelime eşleşmesiyle aramasını istediğin ve aramalarda daha
+  fazla puan (boost/ağırlık) almasını istediğin alanlar burada tanımlanır.
+- Örnek:
+  - "title" (Başlık - BM25'te 3 kat ağırlık verilebilir)
+  - "raporDetayi" (Detaylı metin - BM25'te 2 kat ağırlık verilebilir)
+  - "birim / kategori" (Özel sınıflandırma alanı)
+
+--------------------------------------------------------------------------------
+C) GERİYE KALAN 70+ İÇ İÇE ALAN İÇİN ESNEK TORBA (structuredFields):
+--------------------------------------------------------------------------------
+- 70 tane alan için tek tek Java değişkeni ve getter/setter YAZILMAZ!
+- Bunun yerine şu alan tutulur:
+  private Map<String, Object> structuredFields;
+
+1. OPENSEARCH BU İÇ İÇE VERİYİ ALIP ARKA PLANDA NE YAPACAK?
+   OpenSearch doğuştan NoSQL bir JSON motorudur. İç içe 5 kat derinlikte dahi
+   obje olsa, otomatik olarak hepsini "Noktalı Yol" (Dot Notation) ile indeksler.
+   
+   Örnek Gelen JSON:
+   {
+     "structuredFields": {
+       "radar": {
+         "cihaz": {
+           "irtifa": 12500,
+           "kod": "RAD-99"
+         }
+       },
+       "harekat": {
+         "bolge": "Karadeniz"
+       }
+     }
+   }
+
+   OpenSearch bu veriyi aldığında arka planda şu yolları otomatik açar:
+   -> "structuredFields.radar.cihaz.irtifa"  (Sayısal / integer olarak indeksler)
+   -> "structuredFields.radar.cihaz.kod"     (Keyword / tam metin olarak indeksler)
+   -> "structuredFields.harekat.bolge"       (Keyword / tam metin olarak indeksler)
+
+2. BEN BU VERİLERLE NASIL FİLTRELEME YAPACAĞIM?
+   Arama sorgusu atarken (OpenSearch Query DSL), hiçbir karmaşık SQL yazmadan
+   doğrudan bu noktalı yolları vererek 3 temel filtre uygularsın:
+
+   a) Sayısal Aralık Filtresi (İrtifası 10.000'den büyük olanlar):
+      {
+        "range": {
+          "structuredFields.radar.cihaz.irtifa": { "gte": 10000 }
+        }
+      }
+
+   b) Birebir Değer Eşleşmesi (Bölgesi "Karadeniz" olanlar):
+      {
+        "term": {
+          "structuredFields.harekat.bolge.keyword": "Karadeniz"
+        }
+      }
+
+   c) Hibrit Arama + Çoklu Filtre (Hem "arıza" ara, hem irtifa > 10.000 olsun):
+      {
+        "query": {
+          "bool": {
+            "must": [
+              { "match": { "searchText": "arıza sinyal kaybı" } } // Yapay zeka & BM25
+            ],
+            "filter": [
+              { "range": { "structuredFields.radar.cihaz.irtifa": { "gte": 10000 } } },
+              { "term": { "structuredFields.harekat.bolge.keyword": "Karadeniz" } }
+            ]
+          }
+        }
+      }
+
+3. JAVA KODUNDA BUNU NASIL KULLANACAKSIN?
+   Java OpenSearch Client ile filtre eklemek 1 satırdır:
+   .filter(f -> f.range(r -> r.field("structuredFields.radar.cihaz.irtifa").gte(JsonData.of(10000))))
+
+5. OPENSEARCH BU ALANLARI FİZİKSEL OLARAK NEREDE VE NASIL SAKLAR?
+   OpenSearch tek bir depolama yöntemi kullanmaz; her veri tipine göre en hızlı
+   mekanizmayı seçer:
+   
+   a) Sayılar ve Tarihler (irtifa, hiz, tarih):
+      -> "Doc Values & BKD Sayı Ağacı"nda saklanır (Sütun bazlı Excel sütunu gibi).
+      -> Görevi: "irtifa > 10000" gibi sayısal aralıkları ve sıralamayı (SORT)
+         mikrosaniyede çalıştırmaktır.
+   
+   b) Enum'lar, Kodlar ve Kategoriler (durum="ARIZALI", bolge="Karadeniz"):
+      -> "Keyword Ters İndeksi"nde saklanır (Analizörsüz, harfi harfine tam eşleşme).
+      -> Görevi: Dropdown ve filtre seçimlerini ışık hızında bulmaktır.
+   
+   c) Arama Metinleri (title, searchText):
+      -> "Ters İndeks"te (Turkish Analyzer ile köklerine ayrılmış fihristte) saklanır.
+      -> Görevi: BM25 kelime araması yapmaktır.
+   
+   d) Anlamsal Vektör (1024 boyutlu sayı dizisi):
+      -> "HNSW Vektör Grafı"nda (Örümcek Ağı / FAISS) saklanır.
+      -> Görevi: Anlamsal benzerlik ve yapay zeka aramasını çalıştırmaktır.
+   
+   e) 70 Alanın Orijinal JSON Hali:
+      -> "_source" (Sıkıştırılmış Doküman Deposu) alanında saklanır.
+      -> Görevi: Arama sonucunda tüm detayları ekranda göstermek için sana geri vermektir.
+
+6. BU KADAR FARKLI ALANIN HANGİ VERİYE AİT OLDUĞUNU SİSTEM NEREDEN BİLİYOR?
+   (İÇSEL DocID ZIMBALAMA SİSTEMİ)
+   - Sen her alana ayrı ayrı ID VERMEZSİN! Sen sadece tek bir "id" verirsin (örn: "OLAY-1001").
+   - OpenSearch bu dokümanı diske alırken ona tek bir içsel numara atar:
+     Örnek: "DocID = 42"
+   - Ve tüm parçaları bu 42 numarasına sımsıkı ZIMBALAR:
+     * Ters İndekste "radar" kelimesi      -> [DocID: 42]'yi gösterir.
+     * HNSW Vektör Ağındaki nokta         -> [DocID: 42]'yi gösterir.
+     * İrtifa sütunundaki 12500 sayısı     -> [DocID: 42]'ye aittir.
+     * _source içindeki 70 alanlık JSON    -> [DocID: 42]'nin dosyasıdır.
+   
+   SONUÇ:
+   Kullanıcı ister irtifadan arasın, ister kelimeden, ister vektörden...
+   OpenSearch anında "Bu 42 numaralı dokümandır" der ve _source deposundan
+   o dokümanın orijinal tüm 70 alanını tek parça halinde önüne koyar!
+--------------------------------------------------------------------------------
+D) ÖRNEK IndexDocumentRequest.java ŞABLONU:
+--------------------------------------------------------------------------------
+public class IndexDocumentRequest {
+
+    // 1. Olmazsa Olmaz 3 Temel Alan
+    private String id;
+    private String indexName;
+    private String searchText;
+
+    // 2. BM25 ve Doğrudan Aramada Ağırlık Vereceğin Alanlar
+    private String title;
+    private String raporDetayi;
+
+    // 3. Kalan Tüm 70+ İç İçe Alanın Döküleceği Torba
+    private Map<String, Object> structuredFields;
+    private Map<String, Object> metadata;
+
+    // Getter ve Setter metotları...
+}
+================================================================================
+
+--------------------------------------------------------------------------------
+2. ADIM: OpenSearch Varlık Modelinin (SearchDocument.java) Senkronize Edilmesi
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/model/SearchDocument.java
+
+BU ADIMIN AMACI VE BU SINIFIN GÖREVİ:
+IndexDocumentRequest sınıfı Kafka'dan gelen "Ham İstek Formudur (DTO)".
+SearchDocument ise OpenSearch diskinin içine fiziksel olarak kaydedilen
+"Gerçek Veritabanı Varlığıdır (Entity)".
+
+NEDEN İKİ AYRI SINIF VAR? BU CLASS NE İŞE YARAR?:
+1. Yapay Zeka Vektörünü Taşımak İçin:
+   - Kafka bize 1024 boyutlu yapay zeka vektörünü göndermez (Kafka sadece metin gönderir).
+   - Servisimiz metni BGE-M3 modeline verir ve 1024 boyutlu vektörü alır.
+   - İşte bu üretilen vektörü (float[] embedding) ve sistem zaman damgalarını
+     (createdAt, updatedAt) dokümanın üzerine mühürleyip OpenSearch'e teslim
+     eden sınıf SearchDocument'tir.
+2. Arama Sonuçlarını Karşılamak İçin:
+   - Kullanıcı arama yaptığında OpenSearch'ten dönen sonuçlar IndexDocumentRequest
+     olarak dönmez; diske kaydedilmiş olan bu eksiksiz SearchDocument nesnesi olarak döner.
+
+BU AŞAMADA NE YAPILMASI GEREKİR?:
+- 1. Adımda IndexDocumentRequest içine eklediğin tüm yeni alanları (veya sildiğin alanları)
+  birebir SearchDocument.java içine de yansıtırsın.
+- Üzerine dokunmaman gereken 3 özel sistem alanı vardır:
+  a) private float[] embedding; // 1024 boyutlu BGE-M3 yapay zeka vektörü
+  b) private Instant createdAt; // Kayıt tarihi
+  c) private Instant updatedAt; // Son güncelleme tarihi
+
+ÖRNEK SearchDocument.java ŞABLONU:
+public class SearchDocument {
+
+    // 1. Temel Kimlik ve İndeks
+    private String id;
+    private String indexName;
+
+    // 2. Arama ve Metin Alanları (IndexDocumentRequest ile birebir aynı)
+    private String title;
+    private String searchText;
+    private String raporDetayi;
+
+    // 3. Ekstra Filtreler ve 70 Alanlık Torba (IndexDocumentRequest ile birebir aynı)
+    private Map<String, Object> structuredFields;
+    private Map<String, Object> metadata;
+
+    // 4. OPENSEARCH'E ÖZGÜ ALANLAR (Sadece burada bulunur!)
+    private float[] embedding; // Yapay Zekanın ürettiği 1024 boyutlu vektör
+    private Instant createdAt; // Dokümanın ilk kayıt anı
+    private Instant updatedAt; // Dokümanın son güncellenme anı
+
+    // Getter, Setter ve Builder metotları...
+}
+================================================================================
+
+--------------------------------------------------------------------------------
+3. ADIM: Tercüman ve Karar Merkezi (JsonSearchEventMapper.java)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java
+
+BU CLASS NEDİR VE NE İŞE YARAR?:
+Kafka'dan gelen 70 alanlık ham JSON mesajı ile bizim 1. Adımda hazırladığımız
+IndexDocumentRequest şablonu arasındaki "Tercüman ve Karar Merkezi"dir.
+Kafka'dan gelen veriyi karşılar; dokümanın kimliğini bulur, yapay zekanın (BGE-M3)
+okuyacağı anlamlı metinleri seçip birleştirir ve geriye kalan tüm iç içe
+teknik alanları tek bir hamlede esnek torbaya (structuredFields) aktarır.
+
+BU SINIFTA HANGİ METOTLAR VAR VE NEYİ DEĞİŞTİRMELİYİZ?:
+
+1. "read(String message)" METODU (Paketi Açma ve Kimlik Tespiti):
+   - Ne Yapar?: Kafka'dan gelen ham metni JSON nesnesine çevirir, formatını anlar ve doküman ID'sini bulur.
+
+   A) ZARF (ENVELOPE) FORMATI NEDİR? (KARGO KUTUSU BENZETMESİ):
+      İnternetten bir telefon kılıfı sipariş ettiğinde, ürün doğrudan çıplak kargolanmaz;
+      bir kargo kutusunun (zarfın) içine konur.
+      * Kutunun Dışında (Zarf Etiketi): Takip No ("eventId"), İşlem Tipi ("eventType": "SIL" veya "EKLE").
+      * Kutunun İçinde ("data"): Asıl ürünün (telefon kılıfının) özellikleri durur.
+      
+      Zarflı Örnek JSON:
+      {
+        "eventId": "evt-1234",
+        "eventType": "UPSERT",
+        "version": 2,
+        "data": {
+          "id": 101,
+          "baslik": "Radar Arızası",
+          "irtifa": 12000
+        }
+      }
+
+   B) DÜZ (ZARFSIZ) JSON FORMATI NEDİR?:
+      Ürünün hiçbir koliye konmadan doğrudan gönderilmesidir:
+      {
+        "id": 101,
+        "baslik": "Radar Arızası",
+        "irtifa": 12000
+      }
+
+   C) GELEN VERİYE NASIL BAKMALI VE KODU NASIL GÜNCELLEMELİSİN?:
+      Kafka'dan gelen örnek JSON mesajını önüne al ve şu soruya bak:
+      "Benim asıl verilerim en dış katmanda mı duruyor, yoksa bir 'data' kutusunun içinde mi?"
+      
+      DURUM 1: Verin DÜZ JSON ise (En yaygın durum - Zarf yoksa):
+      - Satır 56'daki zarf kontrolü otomatik olarak devre dışı kalır.
+      - Kod doğrudan Satır 63-73 arasına geçer.
+      
+      BU BÖLÜMDE YAPILACAK BİREBİR KOD DEĞİŞİKLİĞİ (Satır 63-73):
+      
+      ESKİ (Yedeklerle dolu karmaşık hal):
+      ------------------------------------
+      String docId = root.path("id").asText(
+              root.path("documentId").asText(
+                      root.path("entityId").asText(java.util.UUID.randomUUID().toString())));
+      String eventType = root.path("eventType").asText(
+              root.path("type").asText(
+                      root.path("action").asText("UPSERT")));
+      String eventId = root.path("eventId").asText(java.util.UUID.randomUUID().toString());
+      long version = root.path("version").asLong(1L);
+
+      YENİ (Senin verine göre tertemiz ve sade hal):
+      ----------------------------------------------
+      String docId = root.path("id").asText(); // ID alanının adı 'id' ise bu yeterlidir!
+      String eventType = "UPSERT";              // Düz veri her zaman ekleme/güncellemedir
+      String eventId = java.util.UUID.randomUUID().toString();
+      
+      // DİKKAT! Sabit 1L yazarsan aynı ID için gelen 2. güncelleme STALE sayılıp silinir!
+      // JSON'da 'version' alanı yoksa o anki zaman damgasını (milisaniyeyi) kullan:
+      long version = root.path("version").asLong(System.currentTimeMillis());
+
+      return new SearchIndexingEvent(eventId, eventType, docId, version, root);
+
+      DURUM 2: Verin ZARF Formatında ise (Dışında eventType ve data varsa):
+      - Kod Satır 56'daki "if (root.has("eventType") ...)" bloğuna girer.
+      - Bu blok gelen paketi otomatik olarak SearchIndexingEvent nesnesine çevirir.
+      - 'data' içindeki asıl dokümanın otomatik olarak mapDocument metoduna aktarılır.
+      - Bu blok sayesinde koda dokunmana bile gerek kalmadan sistem zarfı tanır!
+
+2. "mapDocument(...)" METODU (ASIL KARAR MERKEZİ - Satır 88-163):
+   - Ne Yapar?: Kafka'dan gelen JSON'ı arama motoruna ve yapay zeka modeline hazır
+     olan "IndexDocumentRequest" nesnesine dönüştüren 6 aşamalı montaj hattıdır.
+
+   -----------------------------------------------------------------------------
+   A) İLK OLARAK: SINIFIN EN BAŞINDAKİ "RESERVED_FIELDS" (Satır 22-25) DÜZENLEMESİ:
+   -----------------------------------------------------------------------------
+   private static final Set<String> RESERVED_FIELDS = Set.of(
+           "id", "type", "title", "searchText", "shortText", "longText",
+           "birim", "adres", "tarih", "konum", // <-- ESKİ KALINTILAR
+           "metadata", "embedding", "createdAt", "updatedAt");
+
+   - NE DEĞİŞECEK?: 
+     Eski modelden kalan "shortText", "longText", "birim", "adres", "tarih", "konum"
+     isimleri bu kümeden SİLİNİR. Yerine yeni modelinde IndexDocumentRequest içine
+     özel getter/setter ile eklediğin temel alanlar (örn: "raporDetayi") yazılır.
+   - NEDEN?: Gelen 70 dinamik alanın, sistemin çekirdek alanlarının üzerine
+     yanlışlıkla yazmasını engellemek için bu küme kullanılır.
+
+   -----------------------------------------------------------------------------
+   B) "mapDocument" METODUNUN 6 AŞAMALI İÇ MEKANİZMASI:
+   -----------------------------------------------------------------------------
+   1. AŞAMA: Giriş Güvenlik Kilidi (Satır 89-91):
+      if (event.data() == null || !event.data().isObject()) {
+          throw new InvalidSearchEventException("UPSERT olayları veri (data) alanında tam doküman gerektirir.");
+      }
+      -> Gelen pakette geçerli bir JSON objesi yoksa kapıda durdurur. KODU AYNEN BIRAK.
+
+   2. AŞAMA: İlk Dönüştürme & Çakışma Denetimi (Satır 93-97):
+      IndexDocumentRequest request = objectMapper.treeToValue(event.data(), IndexDocumentRequest.class);
+      if (request.getStructuredFields() != null
+              && request.getStructuredFields().keySet().stream().anyMatch(RESERVED_FIELDS::contains)) {
+          throw new InvalidSearchEventException("Yapısal dinamik alanlar temel çekirdek alanların üzerine yazamaz.");
+      }
+      -> Gelen JSON'ı IndexDocumentRequest'e döker ve RESERVED_FIELDS çakışması
+         var mı diye bakar. KODU AYNEN BIRAK.
+
+   3. AŞAMA: ESKİ MODELİN KALINTILARI (Satır 99-114) — [BURAYI TAMAMEN SİL!]:
+      tools.jackson.databind.JsonNode fieldsNode = event.data().get("fields");
+      if (fieldsNode != null && fieldsNode.isObject()) {
+          if (request.getBirim() == null && fieldsNode.has("birim")) ...
+          // adres, tarih, konum satırları...
+      }
+      -> ESKİ HÂLİ: PostgreSQL'den gelen "fields.birim", "fields.adres" alanlarını topluyordu.
+      -> YENİ HÂLİ: Bu 15 satırlık bloğun tamamını ÇÖPE AT! Yeni verinde bu alanlar yok.
+
+   4. AŞAMA: 70+ İÇ İÇE ALANIN DİNAMİK TOPLANMASI (Satır 116-132) — [HAYATİ BÖLÜM]:
+      if (request.getStructuredFields() == null) {
+          request.setStructuredFields(new java.util.HashMap<>());
+      }
+      if (event.data().isObject()) {
+          try {
+              Map<String, Object> dataMap = objectMapper.convertValue(event.data(), Map.class);
+              if (dataMap != null) {
+                  for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
+                      String key = entry.getKey();
+                      if (!RESERVED_FIELDS.contains(key) && !"fields".equals(key) && !"structuredFields".equals(key)) {
+                          request.getStructuredFields().putIfAbsent(key, entry.getValue());
+                      }
+                  }
+              }
+          } catch (Exception ignored) {}
+      }
+      -> GÖREVİ: Gelen JSON'daki 70 alanı tek tek if-else ile yazmak yerine;
+         RESERVED_FIELDS dışındaki tüm alanları tek hamlede "structuredFields"
+         torbasına aktarır. OpenSearch bu torbayı "noktalı yol" (dot-notation)
+         ile otomatik olarak indeksler.
+      -> KODU AYNEN KORU! Sadece içindeki !\"fields\".equals(key) kontrolünü
+         artık "fields" nesnesi kullanmıyorsan kaldırabilirsin.
+
+   5. AŞAMA: YAPAY ZEKA METNİNİN (searchText) OLUŞTURULMASI (Satır 134-153):
+      -> BGE-M3 modelinin okuyacağı anlamlı Türkçe metnin hazırlandığı yerdir.
+      -> ESKİ HÂLİ: "shortText", "longText", "content", "icerik" arıyordu.
+      -> YENİ HÂLİ: Kendi yeni veri modelindeki en anlamlı metin alanlarını seçip
+         birleştireceksin.
+         Örnek:
+         if (request.getSearchText() == null || request.getSearchText().isBlank()) {
+             StringBuilder sb = new StringBuilder();
+             if (request.getTitle() != null) sb.append(request.getTitle()).append("\n");
+             if (request.getRaporDetayi() != null) sb.append(request.getRaporDetayi()).append("\n");
+             
+             // Gerekirse JSON içindeki kritik alanları da ekle:
+             String ekstraAciklama = event.data().path("aciklama").asText("");
+             if (!ekstraAciklama.isBlank()) sb.append(ekstraAciklama);
+             
+             request.setSearchText(sb.toString().trim());
+         }
+
+   6. AŞAMA: KİMLİK VE İNDEKS MÜHÜRLEME (Satır 155-159):
+      request.setId(event.documentId());
+      request.setIndexName(route.indexName());
+      request.setType(route.documentType());
+      return request;
+      -> Dokümanın üzerine ID ve İndeks adını mühürleyip hazır form olarak döner. KODU AYNEN KORU.
+
+   -----------------------------------------------------------------------------
+   C) YENİ VERİ MODELİNE GÖRE BİREBİR REFACTOR EDİLMİŞ ÖRNEK "mapDocument":
+   -----------------------------------------------------------------------------
+   @Override
+   public IndexDocumentRequest mapDocument(SearchIndexingEvent event, KafkaIndexingProperties.EventRoute route) {
+       if (event.data() == null || !event.data().isObject()) {
+           throw new InvalidSearchEventException("Ekleme/Güncelleme olayları veri (data) alanında tam doküman gerektirir.");
+       }
+       try {
+           IndexDocumentRequest request = objectMapper.treeToValue(event.data(), IndexDocumentRequest.class);
+           if (request.getStructuredFields() != null
+                   && request.getStructuredFields().keySet().stream().anyMatch(RESERVED_FIELDS::contains)) {
+               throw new InvalidSearchEventException("Yapısal dinamik alanlar temel çekirdek alanların üzerine yazamaz.");
+           }
+
+           // 1. Kalan 70+ Alanı Dinamik Olarak Torbaya Doldur (Eski fieldsNode tamamen silindi!)
+           if (request.getStructuredFields() == null) {
+               request.setStructuredFields(new java.util.HashMap<>());
+           }
+           Map<String, Object> dataMap = objectMapper.convertValue(event.data(), Map.class);
+           if (dataMap != null) {
+               for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
+                   String key = entry.getKey();
+                   if (!RESERVED_FIELDS.contains(key) && !"structuredFields".equals(key)) {
+                       request.getStructuredFields().putIfAbsent(key, entry.getValue());
+                   }
+               }
+           }
+
+           // 2. Yapay Zekanın Okuyacağı Metni Seç ve Birleştir (searchText)
+           if (request.getSearchText() == null || request.getSearchText().isBlank()) {
+               StringBuilder sb = new StringBuilder();
+               if (request.getTitle() != null && !request.getTitle().isBlank()) {
+                   sb.append(request.getTitle()).append("\n");
+               }
+               if (request.getRaporDetayi() != null && !request.getRaporDetayi().isBlank()) {
+                   sb.append(request.getRaporDetayi()).append("\n");
+               }
+               request.setSearchText(sb.toString().trim());
+           }
+
+           // 3. Kimlik ve Rota Mühürleri
+           request.setId(event.documentId());
+           request.setIndexName(route.indexName());
+           request.setType(route.documentType());
+
+           return request;
+       } catch (JacksonException ex) {
+           throw new InvalidSearchEventException("Doküman anlık görüntüsü geçerli değil.", ex);
+       }
+   }
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1. ADIM: Olay Rotalama ve Hedef İndeks Belirleme (SearchEventProcessor.java)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/service/SearchEventProcessor.java (Satır 65-78)
+Yapılandırma Dosyası:
+src/main/resources/application.yml (search.kafka.routes bölümü)
+
+BU KISIM NEDİR VE NE İŞE YARAR?:
+Gelen verinin hangi OpenSearch indeksine (tablosuna) gideceğini ve ne işlem
+yapılacağını (ekleme mi, silme mi) belirleyen "Trafik Yön Tabelasıdır".
+
+KODUN İÇİNDE NE OLUYOR? (Satır 65-78):
+KafkaIndexingProperties.EventRoute configuredRoute = properties.getRoutes().get(event.eventType());
+
+1. AŞAMA: application.yml KONTROLÜ (Satır 65):
+   Gelen olayın tipine bakar (örn: "OLAY_BILDIRILDI" veya senin olay tipin).
+   application.yml altındaki "search.kafka.routes" haritasında bu isimle
+   tanımlanmış bir rota kuralı var mı diye arar.
+
+   application.yml Örneği:
+   search:
+     kafka:
+       routes:
+         "[RADAR_ARIZA]":
+           operation: UPSERT
+           index-name: radar_indeksi
+           document-type: RADAR
+         "[RADAR_SILINDI]":
+           operation: DELETE
+           index-name: radar_indeksi
+           document-type: RADAR
+
+2. AŞAMA: KURAL VARSA (Satır 67-68):
+   Eğer YAML dosyasında bu olay tipi tanımlıysa ("configuredRoute != null");
+   kod doğrudan o kuralı alır:
+   -> Hedef İndeks: "radar_indeksi"
+   -> İşlem Tipi: UPSERT veya DELETE
+
+3. AŞAMA: KURAL YOKSA VEYA DÜZ VERİ GELDİYSE (Fallback - Satır 70-78):
+   Eğer YAML dosyasında bu isimle bir kural yoksa, sistem asla çökmez!
+   Akıllı otomatik yedek devreye girer:
+   - Hedef indeks olarak varsayılan indeksi ("olaylar" veya ilk rotayı) seçer.
+   - Olay tipinin içinde "DELETE" geçiyorsa DELETE, geçmiyorsa UPSERT kabul eder.
+
+YENİ VERİ MODELİNE GÖRE NEYİ GÜNCELLEMELİSİN?:
+- Java kodunu değiştirmene gerek YOKTUR!
+- Eğer yeni bir olay tipi geldiğinde farklı bir indekse (örn: "ihbarlar", "radarlar")
+  gitmesini istersen; sadece "application.yml" dosyasına yeni bir rota eklersin.
+
+4. AŞAMA: KALİTE KONTROL TURNİKESİ -> "validate(event)" ve "validate(document)" (Satır 79 ve Satır 85):
+   - Bu Nedir?: 
+     Jakarta Bean Validation motorudur. Nesnelerin üzerindeki "@NotBlank",
+     "@NotNull", "@Size" gibi kuralları denetler.
+   - Neden İki Kere Çağrılır?:
+     * Satır 79 (validate(event)): Giriş kapısı kontrolüdür. Kafka'dan gelen ham
+       olay sağlam mı diye bakar.
+     * Satır 85 (validate(document)): Çıkış kapısı kontrolüdür. Tercüman (mapDocument)
+       formu doldurduktan sonra zorunlu alanlar (ID vb.) eksiksiz mi diye bakar.
+   - YENİ VERİN GELDİĞİNDE NE DEĞİŞTİRMELİSİN?:
+     * SearchEventProcessor.java dosyasına TEK BİR SATIR KOD YAZMAZSIN!
+     * Doğrulama kurallarını 1. Adımdaki "IndexDocumentRequest.java" sınıfında belirlersin:
+       Örnek: Yeni bir zorunlu alanın varsa:
+       @NotBlank(message = "Rapor kodu boş bırakılamaz")
+       private String raporKodu;
+     * SearchEventProcessor Satır 85'e geldiğinde bu kuralı otomatik olarak uygular!
+       Eğer Kafka'dan gelen veride bu alan boşsa, sisteme girmesine izin vermez
+       ve mesajı Dead-Letter Topic (hata kuyruğu) içine atar.
+
+5. AŞAMA: ÇAPRAZ KİMLİK DOĞRULAMA (Satır 86-88):
+   - if (!event.documentId().equals(document.getId()) ...)
+   - Tercümanın ürettiği ID ve indeks adı, Kafka'dan gelen üst bilgiyle
+     birebir aynı mı diye bakar. Yanlış verinin üstüne yazmayı engeller.
+
+6. AŞAMA: BELLEKTE (RAM) DURUM TAKİBİ VE SİCİL KARTI -> "IndexingState" (Satır 91-98):
+   - İlgili Dosyalar:
+     * src/main/java/com/example/semantic_search/model/IndexingState.java
+     * src/main/java/com/example/semantic_search/repository/IndexingStateRepository.java
+   
+   - BU VERİ KAFKA'DAN MI GELİR?:
+     * KESİNLİKLE HAYIR! Kafka bu nesneyi bilmez ve göndermez.
+     * Kafka sadece ham olayı (eventId, version, documentId, data) taşır.
+     * "IndexingState", uygulamamızın kendi içinde ürettiği ve yönettiği
+       "Doküman Sicil Kartıdır".
+
+   - "HAFIZA / BELLEK" DEDİĞİMİZ YER NERESİDİR?:
+     * Ayrı bir sunucuda çalışan bir veritabanı veya OpenSearch DEĞİLDİR!
+     * Dışarıya hiçbir ağ (network/HTTP) isteği atılmaz.
+     * Spring Boot uygulamamızın çalıştığı Kubernetes pod'unun doğrudan
+       KENDİ RAM'İDİR (JVM Belleği).
+     * IndexingStateRepository sınıfı içindeki "ConcurrentHashMap<String, IndexingState>"
+       yapısıdır.
+     * Dokümanları "indexName::documentId" (Örn: "radar_indeksi::RADAR-101")
+       anahtarıyla RAM'de saklar.
+
+   - NEDEN OPENSEARCH'E SORMUYORUZ DA KENDİ RAM'İMİZE BAKIYORUZ?:
+     * Hız: RAM'deki ConcurrentHashMap'ten sorgu yapmak 0.0001 milisaniyede (mikrosaniyede) biter.
+     * Bağımsızlık: Airgap Kubernetes ortamında harici bir ilişkisel veritabanı
+       (PostgreSQL vb.) bağımlılığını tamamen ortadan kaldırır.
+
+   - KODUN İÇİNDE NE OLUYOR? (Satır 92-98 - "VAR MI / YOK MU?" KONTROLÜ):
+     repository.findByDocumentIdAndIndexNameForUpdate(event.documentId(), indexName)
+     Anahtar: "indexName::documentId" (Örn: "radar_indeksi::RADAR-101")
+
+     1. DURUM: RAM'deki HashMap'te Veri YOKSA (Doküman İlk Defa Geliyorsa):
+        * ".orElseGet" bloğu devreye girer.
+        * Sıfırdan YENİ bir kart açar ("new IndexingState()").
+        * ID ve indeks adını yazar, durumunu PENDING (işleniyor) yapar ve RAM'e kaydeder.
+        * Dokümanın eski versiyonu ("lastEventVersion") boştur (null).
+
+     2. DURUM: RAM'deki HashMap'te Veri VARSA (Doküman Daha Önce Gelmişse - Güncelleme):
+        * ".orElseGet" bloğu HİÇ ÇALIŞMAZ; hafızadaki mevcut kartı çeker.
+        * Dokümanın daha önceki:
+          a) Son versiyon numarasını (lastEventVersion),
+          b) Eski metin özetini (searchTextHash),
+          c) İlk oluşturulma tarihini (createdAt)
+          eline alır ve Satır 100'deki bayat mesaj denetimine teslim eder.
+
+   - YENİ VERİ MODELİNE GÖRE BURADA (Satır 91-98) BİR ŞEY DEĞİŞTİRMELİ MİYİM?:
+     * CEVAP: KESİNLİKLE HAYIR! TEK BİR SATIR KOD DEĞİŞTİRMEZSIN!
+     * NEDEN?: Çünkü bu kod tamamen jeneriktir (generic). Sadece dokümanın ID'si
+       ("event.documentId()") ve hedef indeks ("indexName") ile çalışır.
+       Gelen JSON'ın içinde 4 alan mı var yoksa 70 iç içe alan mı var,
+       bu kod için hiç fark etmez. Aynı şekilde çalışmaya devam eder.
+
+7. AŞAMA: BAYAT VERİ / SIRASIZ MESAJ ENGELİ -> "Outcome.STALE" (Satır 100-102):
+   - if (state.getLastEventVersion() != null && event.version() <= state.getLastEventVersion()) return Outcome.STALE;
+   - Dağıtık kuyruklarda ağ gecikmesi nedeniyle mesajlar sırasız gelebilir.
+   - Eğer daha önce Versiyon 2 işlendiyse ve arkadan gecikmiş Versiyon 1 paketi
+     ulaşırsa; sistem "Bu mesaj bayatlamış (STALE)" diyerek dokunmadan çöpe atar.
+   - Güncel verinin üzerine eski verinin yazılmasını engeller.
+
+   -----------------------------------------------------------------------------
+   ÇOK KRİTİK TUZAK: EĞER GELEN YENİ VERİNDE "version" ALANI YOKSA NE OLUR?
+   -----------------------------------------------------------------------------
+   Eğer Kafka'dan gelen JSON mesajında bir "version" alanı bulunmuyorsa ve sen
+   versiyonu sabit 1L (veya 0L) yaparsan sistem kilitlenir:
+   1. Doküman ilk defa gelir: Versiyon = 1L. Başarıyla OpenSearch'e yazılır ve
+      RAM'e "lastEventVersion = 1L" kaydedilir.
+   2. Aynı doküman için 10 dakika sonra bir GÜNCELLEME gelir: Verinde versiyon
+      olmadığı için yine Versiyon = 1L olur.
+   3. Kod Satır 100'e bakar: "1L <= 1L" şartı DOĞRU (TRUE) çıkar!
+   4. SONUÇ: Sistem bu güncellemeyi "bayatlamış (STALE)" sanır ve SESSİZCE ÇÖPE ATAR!
+      Dokümanın OpenSearch'te asla güncellenmez.
+
+   BU TUZAK NASIL ÇÖZÜLÜR? (2 FARKLI YOL):
+   
+   1. YOL (TAVSİYE EDİLEN - Zaman Damgası / Timestamp Kullanmak):
+      - Java dosyasında: src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java
+      - Satır 70 (veya read metodu):
+        long version = root.path("version").asLong(System.currentTimeMillis());
+      - Böylece her yeni mesaj geldiğinde o anki milisaniye versiyon kabul edilir.
+        Saat 14:00'te gelen: 1711000000, Saat 14:05'te gelen: 1711000300 olur.
+        Her yeni mesaj öncekinden büyük olacağı için güncellemeler asla çöpe gitmez!
+        (Eğer JSON içinde zaten bir güncelleme tarihi/zamanı varsa o da parse edilip verilebilir).
+
+   2. YOL (Versiyon Denetimini Devre Dışı Bırakmak):
+      - Java dosyasında: src/main/java/com/example/semantic_search/service/SearchEventProcessor.java
+      - Eğer senin sisteminde versiyon takibine kesinlikle gerek yoksa ve her gelen
+        mesaj doğrudan OpenSearch'e yazılsın istiyorsan:
+        Satır 100-102 arasındaki şu 3 satırı tamamen yoruma al veya sil:
+        // if (state.getLastEventVersion() != null && event.version() <= state.getLastEventVersion()) {
+        //     return Outcome.STALE;
+        // }
+      - Bu sayede versiyon kontrolü tamamen devre dışı kalır, her mesaj işlenir.
+
+   -----------------------------------------------------------------------------
+   ÖZEL MİMARİ SENARYO (HAFIZA KAYBI / AMNESIA):
+   "MESAJ ESKİ AMA RAM'DE YOK, OPENSEARCH'TE İSE DAHA ÖNCE YAZILDIYSA NE OLUR?"
+   -----------------------------------------------------------------------------
+   Senaryo:
+   1. Dün dokümanın Versiyon 2 hali OpenSearch'e başarıyla yazıldı.
+   2. Gece pod/sunucu yeniden başladı (RAM'deki HashMap sıfırlandı).
+   3. Sabah Kafka'dan ağda gecikmiş olan eski Versiyon 1 paketi ulaştı.
+   
+   Şu Anki Kod Ne Yapar?:
+   - RAM sıfırlandığı için "state.getLastEventVersion()" değeri boştur (null).
+   - Satır 100'deki "null != null" kontrolü FALSE çıkar; sistem mesajın eski olduğunu
+     ANLAYAMAZ ve STALE diyemez!
+   - Sonuç: Dokümanı yeni bir kayıt sanıp yapay zekaya gönderir ve OpenSearch'teki
+     güncel Versiyon 2'nin üzerine eski Versiyon 1'i yazar (Veri ezilir)!
+
+   Bu Durum Nasıl Kesin Olarak Engellenir?:
+   - Çözüm A (OpenSearch External Versioning): OpenSearch'e kaydederken
+     ".version(event.version()).versionType(VersionType.ExternalGte)" verilir.
+     Böylece RAM sıfırlansa dahi OpenSearch kendi diski üzerindeki versiyona bakar;
+     "Bendeki 2, gelen 1" diyerek eski paketi 409 Conflict ile reddeder.
+   - Çözüm B (Epoch Timestamp): Versiyon olarak System.currentTimeMillis() kullanılıyorsa,
+     eski mesajın zaman damgası taze mesajdan küçük kalsa bile, mesajlar 24 saatlik
+     pencerede aktığı için veri tutarlılığı korunur.
+
+8. AŞAMA: ASIL İNDEKSLENME VE OPERASYON ŞALTERİ (Satır 104-107):
+   switch (route.operation()) {
+       case UPSERT -> indexingService.updateDocument(event.documentId(), document);
+       case DELETE -> indexingService.deleteDocument(indexName, event.documentId());
+   }
+
+   - BU SATIRLAR NE İŞE YARAR VE NE YAPAR?:
+     Bütün güvenlik kontrollerinden (Zarf kontrolü, DTO kontrolü, Çapraz ID kontrolü,
+     Bayat mesaj kontrolü) başarıyla geçen tertemiz verinin asıl icraata sokulduğu yerdir.
+
+     A) "UPSERT" DURUMUNDA (Satır 105 - Ekleme ve Güncelleme):
+        * "indexingService.updateDocument(event.documentId(), document)" çağrılır.
+        * Sahneye BGE-M3 Yapay Zeka Modeli ve OpenSearch çıkar:
+          1. Dokümanın arama metninin SHA-256 özetine bakar (searchTextHash).
+          2. Metin değiştiyse BGE-M3 modeline metni gönderir ve 1024 boyutlu vektör üretir.
+             (Metin değişmediyse yapay zekayı hiç çalıştırmaz, eski vektörü korur).
+          3. 70 alanlık veriyi ve üretilen vektörü OpenSearch diski üzerine yazar.
+
+     B) "DELETE" DURUMUNDA (Satır 106 - Silme):
+        * "indexingService.deleteDocument(indexName, event.documentId())" çağrılır.
+        * Yapay zeka ve metin işleme TAMAMEN DEVRE DIŞIDIR!
+        * Doküman nesnesine (document) hiç bakılmaz; sadece indeks adı ve doküman ID'si
+          alınarak OpenSearch'e "Bu ID'li dokümanı diskten sil" REST emri verilir.
+
+   - YENİ VERİ MODELİNE GÖRE BURADA (Satır 104-107) BİR ŞEY DEĞİŞTİRMELİ MİYİM?:
+     * CEVAP: KESİNLİKLE HAYIR! TEK BİR SATIR KOD BİLE DEĞİŞTİRMEZSİN!
+     * NEDEN?:
+       1. "UPSERT" ve "DELETE" operasyonları dünyanın tüm veri modelleri için evrenseldir.
+          İster 4 alanlı basit veri olsun, ister 70 alanlı karmaşık radar verisi olsun;
+          yapılacak işlem ya ekleme/güncellemedir ya da silmedir.
+       2. Dokümanın 70 alanının doldurulma işi zaten 3. Adımda (JsonSearchEventMapper)
+          tamamlanmıştır. Burası sadece trafiği yönlendiren şalterdir.
+
+9. AŞAMA: SİCİL KARTINI MÜHÜRLEME VE BAŞARI BİLDİRİMİ (Satır 109-113):
+   state.setLastEventId(event.eventId());
+   state.setLastEventVersion(event.version());
+   repository.saveAndFlush(state);
+   return Outcome.PROCESSED;
+
+   - BU SATIRLAR NE İŞE YARAR VE NE YAPAR?:
+     İşlem OpenSearch'e başarıyla yazıldıktan sonra yapılan mühürleme ve bitiş adımıdır:
+     1. "state.setLastEventId(event.eventId())": İzlenebilirlik (Audit) sağlar.
+        İleride "Bu dokümanı en son hangi Kafka olayı güncelledi?" sorusunun cevabı burada saklanır.
+     2. "state.setLastEventVersion(event.version())": Bir sonraki mesaj için çıtayı yükseltir.
+        Artık bu dokümanın güncel seviyesi bu versiyon numarasıdır.
+     3. "repository.saveAndFlush(state)": RAM'deki ConcurrentHashMap'e son durumu kaydeder.
+     4. "return Outcome.PROCESSED": İşlemin başarıyla bittiğini ilan eder.
+        Kafka dinleyicisine (KafkaIndexingListener) ve Prometheus/Grafana metriklerine
+        ("search.kafka.events{outcome=processed}") başarı sayacını artırarak haber verir.
+
+   - YENİ VERİ MODELİNE GÖRE BURADA (Satır 109-113) BİR ŞEY DEĞİŞTİRMELİ MİYİM?:
+     * CEVAP: HAYIR! TEK BİR SATIR KOD DEĞİŞTİRMEZSİN!
+     * NEDEN?: Çünkü eventId ve version atamaları jeneriktir; yeni veri modelindeki
+       70 alanın ne olduğuyla hiç ilgilenmez.
+
+10. AŞAMA: KALİTE TURNİKESİ MOTORU -> "validate(Object value)" (Satır 121-125):
+   private void validate(Object value) {
+       if (value == null || !validator.validate(value).isEmpty()) {
+           throw new InvalidSearchEventException("Seçilen olay veya eşlenen doküman validasyondan geçemedi.");
+       }
+   }
+
+   - BU METOT NE İŞE YARAR?:
+     Jakarta Bean Validation motorudur. Hem Satır 79'daki ham Kafka zarfını (event)
+     hem de Satır 85'teki dönüştürülmüş dokümanı (document) denetleyen ortak turnikedir.
+
+   - YENİ VERİ MODELİNE GÖRE BURADA (Satır 121-125) BİR ŞEY DEĞİŞTİRMELİ MİYİM?:
+     * CEVAP: KESİNLİKLE HAYIR! SearchEventProcessor.java sınıfına TEK BİR SATIR KOD YAZMAZSIN!
+     * YENİ KURALLARI NEREDE BELİRLERSİN?:
+       Yeni veri modelinde zorunlu olmasını istediğin alanların kurallarını doğrudan
+       1. Adımdaki "IndexDocumentRequest.java" sınıfı içine anotasyon olarak yazarsın:
+       Örnek:
+       @NotBlank(message = "Sensör kodu boş olamaz")
+       private String sensorKodu;
+       
+       Sen bunu DTO'ya yazdığın anda, SearchEventProcessor'daki bu validate metodu
+       senin yeni kuralını ÇALIŞMA ANINDA OTOMATİK OLARAK ÇALIŞTIRIR!
+       Eğer Kafka'dan gelen yeni veride bu alan boşsa, sisteme girmesine izin vermez
+       ve mesajı anında Dead-Letter Topic (hata kuyruğu) içine fırlatır.
+================================================================================
+
+--------------------------------------------------------------------------------
+3.2. ADIM: Kafka Ayarları ve Rota Konfigürasyonu (KafkaIndexingProperties.java & application.yml)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/config/KafkaIndexingProperties.java
+Yapılandırma Dosyası:
+src/main/resources/application.yml (search.kafka bölümü veya Kubernetes Ortam Değişkenleri)
+
+BU SINIF NEDİR VE NE İŞE YARAR?:
+Spring Boot'un "@ConfigurationProperties("search.kafka")" anotasyonu ile çalışan
+bu sınıf, "application.yml" dosyasındaki tüm Kafka ayarlarını (dinlenecek topic'ler,
+hata kuyruğu, paralel thread sayısı, olay rotaları) tip güvenli (type-safe) Java
+nesnelerine dönüştürür.
+
+SearchEventProcessor içindeki o meşhur "route.operation()" ve "route.indexName()"
+ifadeleri doğrudan bu sınıfın içindeki tanımlardan beslenir.
+
+--------------------------------------------------------------------------------
+A) BU JAVA SINIFINDA (KafkaIndexingProperties.java) NELER TANIMLIDIR?:
+--------------------------------------------------------------------------------
+1. "Operation" ENUM (Satır 58-63):
+   public enum Operation {
+       UPSERT,  // Dokümanı ekle veya varsa güncelle
+       DELETE   // Dokümanı indeksten sil
+   }
+   -> Neden Başka İşlem Yok?: Arama motorlarında "INSERT" ve "UPDATE" ayrımı yapılmaz,
+      ikisi de "UPSERT"tir. Doküman varsa üzerine yazar, yoksa yeni ekler.
+      Silme için de "DELETE" kullanılır. Bu 2 işlem dünyadaki tüm senaryoları kapsar.
+
+2. "EventRoute" RECORD (Satır 82-85):
+   public record EventRoute(
+           @NotNull Operation operation,
+           @NotBlank String indexName,
+           @NotBlank String documentType) { }
+   -> Bu bir Java Record'udur. SearchEventProcessor'da "route.operation()"
+      şeklinde parantezle çağrılmasının sebebi budur. Record yapısı otomatik olarak
+      getter metotlarını parametre adıyla oluşturur.
+
+3. "topics" LİSTESİ (Satır 28-29):
+   private List<@NotBlank String> topics = List.of();
+   -> Tek bir topic değil, birden fazla topic dinleyebilmemizi sağlayan dinamik listedir!
+
+4. "deadLetterTopic" (Satır 35-37):
+   Hatalı, bozuk veya parse edilemeyen mesajların akacağı güvenlik kuyruğudur.
+   Kod içindeki "isDeadLetterTopicSeparate" metodu DLT ile ana topic'lerin aynı
+   olamayacağını garanti eder.
+
+5. "concurrency" (Satır 51-53):
+   Kafka dinleyicisinin kaç paralel thread (iş parçacığı) ile çalışacağını belirler.
+
+--------------------------------------------------------------------------------
+B) YENİ VERİ MODELİNDE BU JAVA SINIFINI (KafkaIndexingProperties.java) 
+   DEĞİŞTİRMEM GEREKİR Mİ?:
+--------------------------------------------------------------------------------
+-> CEVAP: ÇOK BÜYÜK İHTİMALLE HAYIR! (Java koduna dokunmana gerek yoktur).
+-> NEDEN?: Bu sınıf bilerek tamamen jenerik (esnek) yazılmıştır. İçinde eski
+   projeden kalma "birim", "adres", "olay" gibi sabit kodlanmış (hardcoded)
+   HİÇBİR ALAN YOKTUR!
+   
+-> NE ZAMAN DEĞİŞTİRMEN GEREKİR?:
+   Sadece ve sadece rotaya 4. bir parametre eklemek istersen (örn: routingKey,
+   partitionId veya tenantId gibi ekstra bir routing alanı tanımlamak istersen)
+   EventRoute record'una yeni bir alan eklersin. Aksi takdirde Java koduna
+   DOKUNMA!
+
+--------------------------------------------------------------------------------
+C) ASIL GÜNCELLEMENİN YAPILACAĞI YER: application.yml (veya K8s Env):
+--------------------------------------------------------------------------------
+Java koduna dokunmazsın ama uygulamanın yeni veri modelini ve yeni topic'leri
+öğrenmesi için "application.yml" dosyasını güncellemek ZORUNDASIN!
+
+İŞTE GÜNCELLENECEK BÖLÜM VE YAPILACAK DEĞİŞİKLİKLER:
+
+1. TOPIC LİSTESİ (Birden Fazla Topic Dinleme):
+   ESKİ:
+     topics: ${SEARCH_KAFKA_TOPICS:olaylar-events}
+   
+   YENİ (Senin ortamındaki topic'ler):
+     topics: ${SEARCH_KAFKA_TOPICS:radar-events,ihbar-events,lojistik-events}
+   (İster virgülle ayırarak tek satırda yaz, ister YAML listesi olarak alt alta ver).
+
+2. DEAD-LETTER TOPIC (Hata Kuyruğu):
+   ESKİ:
+     dead-letter-topic: ${SEARCH_KAFKA_DEAD_LETTER_TOPIC:olaylar.indexing.errors}
+   YENİ:
+     dead-letter-topic: ${SEARCH_KAFKA_DEAD_LETTER_TOPIC:arama.indexing.errors}
+
+3. ROTALAR (routes) - HANGİ VERİ HANGİ İNDEKSE VE NASIL YAZILACAK?:
+   ESKİ KISIM (Silinecek):
+     routes:
+       "[OLAY]":
+         operation: UPSERT
+         index-name: olaylar
+         document-type: OLAY
+       "[OLAY_BILDIRILDI]":
+         operation: UPSERT
+         index-name: olaylar
+         document-type: OLAY
+       "[OLAY_SILINDI]":
+         operation: DELETE
+         index-name: olaylar
+         document-type: OLAY
+
+   YENİ KISIM (Senin yeni sistemine göre eklenecek örnek şablon):
+     routes:
+       # Radar Topic'inden gelen ekleme/güncelleme olayları:
+       "[RADAR_TESPIT]":
+         operation: UPSERT
+         index-name: radar_indeksi
+         document-type: RADAR
+       # Radar silme olayları:
+       "[RADAR_SILINDI]":
+         operation: DELETE
+         index-name: radar_indeksi
+         document-type: RADAR
+       # İhbar Topic'inden gelen olaylar:
+       "[IHBAR_GIRIS]":
+         operation: UPSERT
+         index-name: ihbar_indeksi
+         document-type: IHBAR
+
+4. BROKER LİSTESİ VE PARALEL THREAD (CONCURRENCY) AYARLARI:
+   ESKİ:
+     spring.kafka.bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+     search.kafka.concurrency: ${SEARCH_KAFKA_CONCURRENCY:1}
+
+   YENİ (Canlı / Test Kümesi Örneği):
+     # Çoklu Broker Kümesi (Cluster):
+     spring.kafka.bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka1:9092,kafka2:9092,kafka3:9092}
+     
+     # Thread (Tüketici İş Parçacığı) Sayısı:
+     search.kafka.concurrency: ${SEARCH_KAFKA_CONCURRENCY:4}
+
+--------------------------------------------------------------------------------
+D) DÜZ JSON GELDİĞİNDE (Zarf Yoksa) ROTANIN DAVRANIŞI:
+--------------------------------------------------------------------------------
+Eğer Kafka'dan gelen mesajların içinde "eventType" diye bir alan yoksa (düz JSON ise),
+SearchEventProcessor fallback mekanizması devreye girer:
+- YAML'daki routes haritasındaki ilk rotanın "index-name"ini alır.
+- İşlem tipini varsayılan olarak "UPSERT" yapar.
+- Bu yüzden routes kısmındaki İLK rotanın adını, en çok veri akacak ana indeksin
+  olarak tanımlaman en iyi pratiktir!
+
+--------------------------------------------------------------------------------
+E) SİSTEM VE DONANIM DEĞİŞTİĞİNDE KODU GÜNCELLEME VE REFAKTÖR REHBERİ:
+   (NEDEN, NEREDE VE NASIL DEĞİŞİKLİK YAPILMALI?)
+--------------------------------------------------------------------------------
+
+1. TEMEL KURAL: KAFKA PARTITION VE THREAD (CONCURRENCY) ALTIN İLİŞKİSİ
+   -----------------------------------------------------------------
+   Kafka'da paralellik "Topic Partition" seviyesindedir. 
+   
+   FORMÜL:
+     Toplam Tüketici Thread Sayısı = (Uygulama Pod / Sunucu Sayısı) x (concurrency)
+
+   * ALTIN KURAL: Toplam Thread Sayısı, Topic'in Partition Sayısından FAZLA OLAMAZ!
+     - Örnek: "radar-events" topic'inde 3 partition varsa:
+       Sen concurrency = 6 yaparsan veya 2 pod x 3 concurrency = 6 thread açarsan,
+       Sadece 3 thread çalışır, kalan 3 thread BOŞTA (idle) bekler, CPU/RAM israfıdır.
+     - Eğer sistemde veri yükü arttıysa ve daha hızlı tüketim isteniyorsa:
+       1) Önce Kafka tarafında Topic partition sayısı artırılır (örn: 3 -> 12).
+       2) Ardından uygulamada concurrency veya pod sayısı artırılır (örn: 3 pod x 4 concurrency = 12 thread).
+
+2. BROKER SAYISI DEĞİŞTİĞİNDE KOD GÜNCELLENİR Mİ?
+   ------------------------------------------------
+   -> KOD DEĞİŞİKLİĞİ GEREKMEZ!
+   - Neden?: Spring Boot'un "spring.kafka.bootstrap-servers" özelliği harici ortam
+     değişkeniyle yönetilir.
+   - Nerede Değiştirilir?: "application.yml" veya Kubernetes Helm / Deployment manifestindeki
+     "KAFKA_BOOTSTRAP_SERVERS" ortam değişkenine virgülle ayrılarak yeni broker IP'leri girilir.
+   - Örnek: KAFKA_BOOTSTRAP_SERVERS="10.0.1.10:9092,10.0.1.11:9092,10.0.1.12:9092"
+
+3. THREAD (CONCURRENCY) DEĞİŞTİĞİNDE KOD GÜNCELLENİR Mİ?
+   -----------------------------------------------------
+   -> MEVCUT DURUMDA KOD DEĞİŞİKLİĞİ GEREKMEZ!
+   - Neden?: "KafkaIndexingConfiguration.java" içindeki Satır 130'a bakarsan:
+       factory.setConcurrency(properties.getConcurrency());
+     değeri doğrudan "KafkaIndexingProperties.java" üzerinden YAML'daki "search.kafka.concurrency"
+     değerinden almaktadır.
+   - Nerede Değiştirilir?: "application.yml" dosyasındaki "search.kafka.concurrency" alanı
+     veya sistem ortam değişkeni olan "SEARCH_KAFKA_CONCURRENCY" güncellenir.
+
+4. PEKİ HANGİ İLERİ SENARYOLARDA JAVA KODU REFAKTÖR EDİLMELİDİR?
+   -------------------------------------------------------------
+   Sistem büyüdükçe veya veri modeli özelleştikçe aşağıdaki 3 durumda Java kodunda
+   refaktör yapılması gerekir:
+
+   A) SENARYO 1: BATCH (TOPLU) TÜKETİM VE BULK INDEXING REFAKTÖRÜ (YÜKSEK TRAFİK)
+      - Neden?: Şu anki kodumuzda (KafkaIndexingListener.java) her mesaj TEK TEK
+        (record by record) işlenir. Saniyede 10.000+ mesaj aktığı durumlarda OpenSearch'e
+        ve Embedding servisine tek tek istek atmak sistemi kilitler. Toplu paketleme gerekir.
+      - Nerede Değişiklik Yapılır?:
+        1) "KafkaIndexingConfiguration.java":
+           factory.setBatchListener(true); // Container batch moduna alınır
+           factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.BATCH);
+        2) "KafkaIndexingListener.java":
+           // Metot parametresi tek record yerine List yapılır:
+           @KafkaListener(...)
+           public void listen(List<ConsumerRecord<String, String>> records) {
+               // Toplu metin embedding'i ve OpenSearch Bulk API çağrısı
+           }
+
+   B) SENARYO 2: TOPIC BAŞINA FARKLI CONCURRENCY VE AYRI DİNLİYİCİ REFAKTÖRÜ
+      - Neden?: Şu an tüm topic'ler tek bir @KafkaListener ve tek bir concurrency
+        ile dinlenmektedir. Fakat diyelim ki "radar" topic'i 12 partition'a sahip ve
+        çok yoğun; "ihbar" topic'i ise 1 partition'a sahip ve sakin. Tek bir factory
+        kullanmak kaynakları verimsiz böler.
+      - Nerede Değişiklik Yapılır?:
+        1) "KafkaIndexingConfiguration.java":
+           İki ayrı factory tanımlanır:
+           - highThroughputContainerFactory (concurrency = 8)
+           - standardContainerFactory (concurrency = 1)
+        2) "KafkaIndexingListener.java":
+           Tek metot yerine topic'lere göre ayrılmış iki listener metodu yazılır:
+           @KafkaListener(topics = "radar-events", containerFactory = "highThroughputContainerFactory")
+           public void listenRadar(ConsumerRecord<String, String> record) { ... }
+
+           @KafkaListener(topics = "ihbar-events", containerFactory = "standardContainerFactory")
+           public void listenIhbar(ConsumerRecord<String, String> record) { ... }
+
+   C) SENARYO 3: MANUEL ACKNOWLEDGMENT (TAM GÜVENLİ TRANSACTION) REFAKTÖRÜ
+      - Neden?: Şu anki mod "AckMode.RECORD"dur. Eğer işlem sırasında veri tabanına
+        yazılamadan pod ölürse mesajın kaybolmaması veya garantiye alınması için
+        manuel commit (Acknowledgment) gerekebilir.
+      - Nerede Değişiklik Yapılır?:
+        1) "KafkaIndexingConfiguration.java":
+           factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        2) "KafkaIndexingListener.java":
+           public void listen(ConsumerRecord<String, String> record, Acknowledgment ack) {
+               try {
+                   processor.process(record.value());
+                   ack.acknowledge(); // Sadece işlem 100% başarılı olunca Kafka'ya onay ver
+               } catch (Exception e) {
+                   // Hata stratejisi
+               }
+           }
+================================================================================
+
+--------------------------------------------------------------------------------
+3.3. ADIM: İndeksleme İş Servisi ve Vektör Üretimi (IndexingService.java)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/service/IndexingService.java
+
+BU SINIF NEDİR VE NE İŞE YARAR?:
+SearchEventProcessor'dan gelen temiz doküman isteğini (IndexDocumentRequest) alıp;
+BGE-M3 yapay zeka modeline göndererek 1024 boyutlu anlamsal vektörünü (embedding)
+çıkartan, doküman varlığını (SearchDocument) inşa eden ve OpenSearch veritabanına
+fiziksel olarak teslim eden "Asıl İcraat Mutfağıdır".
+
+--------------------------------------------------------------------------------
+A) METODUN 4 AŞAMALI İÇ ÇALIŞMA MEKANİZMASI (Satır 114-162):
+--------------------------------------------------------------------------------
+1. İNDEKS KONTROLÜ (Satır 118):
+   openSearchAdapter.createIndexIfNotExists(indexName);
+   - Hedef indeks OpenSearch diski üzerinde henüz açılmamışsa, Türkçe dil
+     analizörü ve HNSW vektör ayarlarıyla birlikte otomatik olarak oluşturur.
+
+2. AKILLI HASH KONTROLÜ VE YAPAY ZEKA TASARRUFU (Satır 120-136):
+   - Arama metninin SHA-256 özetini (searchTextHash) hesaplar.
+   - Metin DEĞİŞTİYSE:
+     "generateEmbeddingIfNeeded(request.getSearchText())" çağrılır.
+     BGE-M3 modeline gider ve 1024 boyutlu vektör (float[] embedding) üretir.
+   - Metin DEĞİŞMEDİYSE (Örn: sadece sayısal irtifa veya durum kodu güncellendiyse):
+     Yapay zeka modelini HİÇ ÇALIŞTIRMAZ! Eski vektörü korur. Bu sayede sunucu
+     GPU/CPU kaynaklarını binlerce gereksiz işlemden kurtarır.
+
+3. DOKÜMANI İNŞA ETME (SearchDocument.builder() - Satır 138-155):
+   - DTO nesnesindeki alanları ve üretilen vektörü alıp disk varlığı olan
+     SearchDocument nesnesine yerleştirir.
+
+4. OPENSEARCH'E YAZMA VE DURUMU MÜHÜRLEME (Satır 157-159):
+   - "openSearchAdapter.indexDocument(document);": Dokümanı OpenSearch'e post eder.
+   - "saveIndexingState(...)": RAM'deki durum kartını INDEXED (Yazıldı) yapar.
+
+--------------------------------------------------------------------------------
+B) YENİ VERİ MODELİNE GÖRE BU SINIFTA NELERİ DEĞİŞTİRECEKSİN? (ÇOK KRİTİK!):
+--------------------------------------------------------------------------------
+Bu sınıfta 3 farklı metot içerisinde doküman inşa edilirken eski modelin alanları
+elle set edilmiştir. 1. Adımda IndexDocumentRequest ve 2. Adımda SearchDocument
+sınıflarından eski alanları sildiğin için, bu sınıftaki eski satırları silmezsen
+PROJEN KIRMIZI HATA VERİR VE DERLENMEZ!
+
+DEĞİŞİKLİK YAPILACAK 3 YER (SATIR NUMARALARIYLA):
+1. "indexDocument" Metodu -> Satır 88-93
+2. "updateDocument" Metodu -> Satır 144-149
+3. "bulkIndex" Metodu -> Satır 207-212
+
+İŞTE BU 3 YERDE YAPILACAK BİREBİR KOD DEĞİŞİKLİĞİ:
+
+ESKİ KOD (SİLİNECEK 6 SATIR):
+--------------------------------------------------
+.shortText(request.getShortText())
+.longText(request.getLongText())
+.birim(request.getBirim())
+.adres(request.getAdres())
+.tarih(request.getTarih())
+.konum(request.getKonum())
+
+YENİ KOD (YERİNE EKLENECEK YENİ TEMEL ALANIN):
+--------------------------------------------------
+.raporDetayi(request.getRaporDetayi())
+
+--------------------------------------------------------------------------------
+C) GERİYE KALAN 70+ İÇ İÇE ALAN İÇİN TEK TEK SATIR YAZACAK MIYIM?:
+--------------------------------------------------------------------------------
+KESİNLİKLE HAYIR!
+Satır 150'deki şu tek satır:
+.structuredFields(request.getStructuredFields())
+Geriye kalan tüm 70+ iç içe alanı, koordinatları ve teknik detayları tek hamlede
+OpenSearch varlığına (SearchDocument) aktarır.
+
+--------------------------------------------------------------------------------
+D) SİLME İŞLEMİ (deleteDocument - Satır 165-174):
+--------------------------------------------------------------------------------
+- "openSearchAdapter.deleteDocument(indexName, documentId);"
+- Silme işlemi için dokümanın 70 alanına veya yapay zeka vektörüne hiç gerek yoktur.
+- Sadece ID ve indeks adı verilir; OpenSearch diski üzerinden o ID doğrudan silinir.
+- RAM'deki durum kartı da DELETED olarak işaretlenir.
+================================================================================
+
+--------------------------------------------------------------------------------
+4. ADIM: Arama Motorunun Beyni ve Terazi Ayarları (OpenSearchAdapter.java)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/client/opensearch/OpenSearchAdapter.java
+
+BU CLASS NEDİR VE NE İŞE YARAR?:
+Uygulamamız ile dış dünyadaki OpenSearch veritabanı arasındaki "Köprü ve Sürücü (Driver)"
+katmanıdır. OpenSearch'ün karmaşık JSON sorgularını, HNSW vektör matematiğini ve
+Türkçe dil analizörünü yönetir. İş servisleri (IndexingService, SearchService)
+veritabanı detaylarını bilmez, tüm arama ve kayıt işlerini bu sınıfa yaptırır.
+
+BU CLASSTA YENİ VERİ MODELİNE GÖRE DEĞİŞECEK 5 KRİTİK NOKTA (SATIR NUMARALARIYLA):
+
+1. NOKTA: "CORE_FIELDS" LİSTESİ (Satır 56-60):
+   --------------------------------------------------
+   OpenSearchAdapter sınıfının en başında şu küme bulunur:
+   private static final Set<String> CORE_FIELDS = Set.of(
+           "id", "type", "title", "searchText",
+           "metadata", "embedding", "createdAt", "updatedAt",
+           "shortText", "longText", "birim", "adres", "tarih", "konum" // <-- ESKİLER
+   );
+   
+   NE DEĞİŞECEK?:
+   Eski modelden kalan "shortText", "longText", "birim", "adres", "konum" silinir.
+   Yerine 1. Adımda tanımladığın yeni temel alanlar (örn: "raporDetayi", "hedefTipi") eklenir.
+   NEDEN?: Sistem bu listede olmayan her alanı otomatik olarak dinamik 70 alan
+   (structuredFields) kabul eder.
+
+2. NOKTA: İNDEKS ŞEMASI MAPPING'İ -> "createIndexIfNotExists" (Satır 126-150):
+   ------------------------------------------------------------------------------
+   OpenSearch indeksi ilk açıldığında hangi sütunun ne tipte olacağını belirler:
+   
+   .mappings(m -> m
+       // Doküman ID ve Vektör Alanı (BUNLARA DOKUNMA! ŞARTTIR):
+       .properties("id", p -> p.keyword(k -> k))
+       .properties("embedding", p -> p.knnVector(knn -> knn.dimension(1024)...))
+
+       // YENİ ALANLARIN: Metin olanları Türkçe analizör ile açarsın:
+       .properties("title", p -> p.text(t -> t.analyzer("turkish_search").fields("keyword", f -> f.keyword(k -> k.ignoreAbove(256)))))
+       .properties("searchText", p -> p.text(t -> t.analyzer("turkish_search")))
+       .properties("raporDetayi", p -> p.text(t -> t.analyzer("turkish_search")))
+       
+       // EN KRİTİK AYAR (KALAN 70 ALAN İÇİN):
+       .dynamic(DynamicMapping.True) // 70 alan için tek tek satır YAZILMAZ, otomatik indekslenir!
+   )
+   
+   Eski "birim", "adres", "shortText", "longText", "konum" satırları buradan temizlenir.
+
+3. NOKTA: BM25 ALAN AĞIRLIKLARI (BOOST) -> "buildBm25QueryWithFilters" (Satır 704):
+   ---------------------------------------------------------------------------------
+   Kullanıcı arama yaptığında aranan kelimenin hangi alanda ne kadar puan alacağını
+   belirlediğin yerdir:
+   
+   .fields("title^3.0", "raporDetayi^2.0", "searchText^1.0")
+   
+   - title^3.0: Kelime başlıkta geçiyorsa puanı 3 ile çarp.
+   - raporDetayi^2.0: Kelime raporda geçiyorsa puanı 2 ile çarp.
+   - searchText^1.0: Genel metinde geçiyorsa standart puan ver.
+   (Eski "birim^2.0", "adres^2.0" buradan silinir, yerine senin yeni alanların yazılır).
+
+4. NOKTA: FİLTRE TAM EŞLEŞME LİSTESİ -> "keywordSubfields" (Satır 793):
+   ---------------------------------------------------------------------
+   Set<String> keywordSubfields = Set.of("type", "title", "raporDetayi");
+   Eğer metin olan bir alanı kullanıcı dropdown veya tam eşleşmeyle filtreleyecekse,
+   OpenSearch'ün ".keyword" uzantısını kullanması için alan adını buraya eklersin.
+
+5. NOKTA: ARAMA SONUCUNU KARŞILAMA -> "mapSource" (Satır 880-900):
+   -----------------------------------------------------------------
+   OpenSearch'ten arama sonuçları döndüğünde gelen JSON haritasını SearchResult
+   nesnesine doldurur:
+   result.setId((String) source.get("id"));
+   result.setTitle((String) source.get("title"));
+   result.setRaporDetayi((String) source.get("raporDetayi")); // <-- Yeni alanın
+   // Eski result.setBirim(...), result.setAdres(...) satırları temizlenir.
+
+--------------------------------------------------------------------------------
+4. ADIMLA BİRLİKTE DÜZELTİLMESİ GEREKEN ÇOK ÖNEMLİ 2 EŞLİKÇİ DOSYA:
+--------------------------------------------------------------------------------
+
+A) OpenSearchDocumentSourceMapper.java:
+   (src/main/java/com/example/semantic_search/client/opensearch/OpenSearchDocumentSourceMapper.java)
+   - Bu sınıf SearchDocument nesnesini OpenSearch JSON'ına çevirir.
+   - Satır 24-27: "CORE_FIELDS" listesini aynı şekilde yeni alanlarınla güncelle.
+   - Satır 48-63 ("toSource" metodu):
+     source.put("id", document.getId());
+     source.put("title", document.getTitle());
+     source.put("raporDetayi", document.getRaporDetayi()); // <-- Yeni alanın getter'ı
+     (Eski getBirim, getAdres satırlarını sil).
+
+B) SearchResult.java:
+   (src/main/java/com/example/semantic_search/dto/SearchResult.java)
+   - Arama sonuçlarının ekrana (UI / REST API) döndüğü DTO modelidir.
+   - Buradaki eski "birim", "adres", "shortText", "longText" alanlarını silip,
+     kendi yeni alanlarını (örn: "raporDetayi") getter/setter ile eklersin.
+
+--------------------------------------------------------------------------------
+EKSTRA TEKNİK DETAYLAR (TURKISH ANALYZER, MULTIMATCH, FUZZINESS, UNCHECKED):
+--------------------------------------------------------------------------------
+
+1. TURKISH ANALYZER'IN KURALLARI NEREDEDİR VE DEĞİŞTİRİLEBİLİR Mİ?:
+   - Nerededir?: OpenSearchAdapter.java içindeki "createIndexIfNotExists" metodu (Satır 107-125).
+   - Değiştirilebilir mi?: EVET, %100 değiştirilebilir!
+   - 5 Aşamalı Dil Fabrikası:
+     a) tokenizer("standard"): Metni boşluklardan böler.
+     b) filter("apostrophe"): Kesme işaretini ayırır ("Ankara'da" -> "Ankara").
+     c) filter("lowercase"): Türkçe küçük harf kurallarına göre çevirir (İ/i, I/ı).
+     d) filter("turkish_keywords"): Korumalı kelimeleri mühürler (Stemmer bozamaz).
+        * Nereden Yüklenir?: "src/main/resources/data/turkey_locations.json" (973 il/ilçe).
+        * Sen Nasıl Değiştirirsin?: "İHA", "SİHA", "TSK" gibi terimleri
+          bu JSON'a veya koda eklersen asla kökleri bozulmaz.
+     e) filter("turkish_stop"): "ve", "veya", "için" gibi bağlaçları temizler.
+     f) filter("turkish_stemmer"): Çekim eklerini atarak Türkçe kökü bulur.
+
+2. .multiMatch, "m" VE "mm" NEDİR?:
+   - .multiMatch: Tek kelimeyi birden fazla sütunda (title, raporDetayi, searchText) arar.
+   - "m" (must): Java lambda fonksiyonunda zorunlu arama şartı builder'ıdır.
+   - "mm" (multiMatch): MultiMatch sorgusunun ayarlarını (alanlar, katsayılar) tutan builder'dır.
+
+3. .fuzziness("AUTO:5,8") (Yazım Hatası Toleransı):
+   - 5 harften kısa kelimelerde: 0 hata (tam eşleşme).
+   - 5 - 8 harf arası kelimelerde: 1 harf hatasını affeder ("radra" -> "radar").
+   - 8 harften uzun kelimelerde: 2 harf hatasını affeder ("helikoptre" -> "helikopter").
+
+4. @SuppressWarnings("unchecked") NEDİR?:
+   - Java derleyicisinin tip dönüşümü (Map -> Map<String,Object>) sırasında verdiği
+     "tip güvenliği kanıtlanamadı" sarı uyarılarını susturur.
+================================================================================
+
+--------------------------------------------------------------------------------
+5. ADIM: Doküman Kaynak Dönüştürücüsü (OpenSearchDocumentSourceMapper.java)
+--------------------------------------------------------------------------------
+Dosya Yolu: 
+src/main/java/com/example/semantic_search/client/opensearch/OpenSearchDocumentSourceMapper.java
+
+BU CLASS NEDİR VE NE İŞE YARAR?:
+Java dünyasındaki "SearchDocument" nesnesi ile OpenSearch'ün diskine yazılan
+veya diskten okunan ham JSON haritası (Map<String, Object>) arasındaki
+"Vagon Yükleyicidir / Serileştiricidir".
+Bu sınıf olmadan SearchDocument nesnesi OpenSearch'ün anlayacağı JSON'a
+dönüştürülemez. 2. Adımda SearchDocument'i güncelledikten sonra burayı
+güncellemezsen projen derlenmez (kırmızı hata verir).
+
+BU CLASSTA YAPILMASI GEREKEN 3 KRİTİK DÜZENLEME:
+
+1. "CORE_FIELDS" KÜMESİNİN GÜNCELLENMESİ (Satır 24-28):
+   private static final Set<String> CORE_FIELDS = Set.of(
+           "id", "type", "title", "searchText", "metadata",
+           "embedding", "createdAt", "updatedAt",
+           "shortText", "longText", "birim", "adres", "tarih", "konum" // <-- ESKİLER
+   );
+   - NE YAPILACAK?: 
+     Eski modelden kalan "shortText", "longText", "birim", "adres", "konum" silinir.
+     Yerine 1. Adımda tanımladığın yeni temel alanlar (örn: "raporDetayi") yazılır.
+   - EN KRİTİK GEREKÇE (Çakışma Kontrolü): 
+     Satır 65-69'daki kod şudur:
+     "collisions.retainAll(CORE_FIELDS); if (!collisions.isEmpty()) throw IllegalArgumentException..."
+     Eğer bu listeyi güncellemezsen, 70 alanlık torbadaki dinamik alanlarla temel alanlar
+     birbirine girer ve sistem çalışma anında çakışma hatası fırlatır!
+
+2. "toSource(SearchDocument document)" METODUNUN DÜZENLENMESİ (Satır 48-63):
+   Java SearchDocument nesnesini OpenSearch JSON haritasına dolduran yerdir.
+   - Eski alanların silinmesi:
+     // if (document.getBirim() != null) source.put("birim", document.getBirim());  <-- SİL
+     // if (document.getAdres() != null) source.put("adres", document.getAdres());  <-- SİL
+   - Yeni alanların eklenmesi:
+     if (document.getRaporDetayi() != null) {
+         source.put("raporDetayi", document.getRaporDetayi());
+     }
+   - Dokunulmayacak Temel Alanlar: 
+     "id", "title", "searchText", "embedding", "createdAt", "updatedAt" aynen kalır.
+
+3. KODUN ÇALIŞMA MANTIĞI:
+   "OpenSearchAdapter.indexDocument(document)" metodu çağrıldığında ilk olarak bu
+   mapper'ın "toSource(document)" metodunu çalıştırır ve üretilen temiz JSON haritasını
+   OpenSearch'e HTTP üzerinden post eder.
+================================================================================

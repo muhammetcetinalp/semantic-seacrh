@@ -1,0 +1,196 @@
+================================================================================
+KAFKA 24 SAAT SIFIRLANMA VE ÇÖKME DAYANIKLILIĞI REHBERİ (RESILIENCE FEATURE)
+================================================================================
+
+BU DÖKÜMANIN AMACI:
+Kafka kümesinin (broker/topic) 24 saatte bir kendini sıfırladığı (log retention = 24h
+veya günlük topic temizliği) ve Spring Boot arama servisinin çökme/yeniden başlama
+ihtimalinin bulunduğu ortamlarda (özellikle Airgap Kubernetes); sıfır veri kaybı,
+kesintisiz indeksleme ve doğru versiyonlama garantisi sağlayan mimari çözümleri sunmaktır.
+
+================================================================================
+1. SENARYO VE KARŞILAŞILABİLECEK 3 BÜYÜK RİSK
+================================================================================
+
+SENARYO:
+- Kafka kuyruğu 24 saatlik veri saklama süresine (retention) sahiptir.
+- 24 saat dolduğunda eski mesajlar Kafka diskinden tamamen silinir.
+- Spring Boot uygulamamız Kubernetes üzerinde pod olarak çalışmaktadır ve
+  IndexingState durum takibini kendi RAM'inde (ConcurrentHashMap) tutmaktadır.
+
+--------------------------------------------------------------------------------
+RİSK 1: ÇÖKME SONRASI VERİ KAYBI (24 Saatten Uzun Süren Kesintiler)
+--------------------------------------------------------------------------------
+- Ne Zaman Olur?:
+  Spring Boot servisi bir arıza sebebiyle çökerse ve sistem yöneticileri veya
+  otomasyon pod'u 24 saat boyunca tekrar ayağa kaldıramazsa.
+- Sonuç:
+  Kafka 24 saat sonra henüz okunmamış mesajları diskinden siler. Servis 25. saatte
+  açıldığında o mesajlar artık Kafka'da yoktur. OpenSearch'e hiç yazılamaz ve
+  veri kalıcı olarak kaybolur.
+
+--------------------------------------------------------------------------------
+RİSK 2: GÜNLÜK VERSİYON SIFIRLANMASI VE "STALE" KİLİTLENMESİ (EN TEHLİKELİSİ!)
+--------------------------------------------------------------------------------
+- Ne Zaman Olur?:
+  Veriyi Kafka'ya basan harici sistem (Producer), her gün 00:00'da versiyon sayacını
+  sıfırlayıp tekrar 1'den başlatıyorsa.
+- Senaryo:
+  * Dün "RADAR-101" dokümanı 20 defa güncellendi -> RAM'deki lastEventVersion = 20.
+  * Gece Kafka sıfırlandı, Producer yeni güne başladı ve Versiyon = 1 gönderdi.
+  * Bizim Spring Boot çökmediyse (RAM ayaktaysa), Satır 100'e bakar:
+    "event.version() (1) <= state.getLastEventVersion() (20)" -> ŞART DOĞRU!
+- Sonuç:
+  Sistem: "Bu dünün eski mesajı, bayatlamış (STALE)" diyerek bugünün TÜM TAZE
+  MESAJLARINI SESSİZCE ÇÖPE ATAR! Doküman OpenSearch'te asla güncellenmez.
+
+--------------------------------------------------------------------------------
+RİSK 3: RAM BELLEĞİN ZAMANLA ŞİŞMESİ (OutOfMemoryError - Bellek Sızıntısı)
+--------------------------------------------------------------------------------
+- Ne Zaman Olur?:
+  Kafka 24 saatte bir eski verileri silmesine rağmen, Spring Boot RAM'indeki
+  "ConcurrentHashMap" eski kayıtları hiç silmezse.
+- Sonuç:
+  Aylar geçtikçe RAM'de milyonlarca eski doküman kartı birikir. Sunucunun
+  JVM belleği dolar ve "java.lang.OutOfMemoryError" ile tüm sistem kilitlenir.
+
+================================================================================
+2. 4 AŞAMALI KESİN ÇÖZÜM MİMARİSİ (FEATURE SPECIFICATION)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. ÇÖZÜM: EPOCH TIMESTAMP (MİLİSANİYE) İLE VERSİYONLAMA (HAYAT KURTARICI)
+--------------------------------------------------------------------------------
+Gelen mesajlarda sabit 1, 2, 3 gibi bağıl sayılar yerine daima ileriye doğru
+akan evrensel zaman damgası (Epoch Milliseconds) kullanılmalıdır.
+
+Uygulama Yeri:
+src/main/java/com/example/semantic_search/kafka/JsonSearchEventMapper.java (Satır 70 civarı)
+
+KOD DEĞİŞİKLİĞİ:
+--------------------------------------------------------------------------------
+// Yanlış: Sabit versiyon (STALE kilitlenmesine yol açar!)
+// long version = 1L; 
+
+// Doğru: JSON'da versiyon yoksa o anki sistem milisaniyesini kullan:
+long version = root.path("version").asLong(System.currentTimeMillis());
+--------------------------------------------------------------------------------
+
+NEDEN BU ÇÖZÜM?:
+- Kafka veya Producer günde 10 kere sıfırlansa bile ZAMAN GERİYE AKMAZ!
+- Dünün saat 23:59:59 zaman damgası:  1711000000
+- Bugünün saat 00:00:01 zaman damgası: 1711000100
+- 1711000100 > 1711000000 olduğu için hiçbir yeni mesaj STALE hatasına takılmaz;
+  tüm güncellemeler OpenSearch'e başarıyla yansır.
+
+--------------------------------------------------------------------------------
+2. ÇÖZÜM: KUBERNETES HIGH AVAILABILITY (Çökme Süresini Sıfırlama)
+--------------------------------------------------------------------------------
+24 saatlik veri kaybı riskini yok etmenin en temel kuralı, servisin kesinti
+süresini (downtime) sıfıra yaklaştırmaktır.
+
+Uygulama Yeri:
+Kubernetes Deployment Manifestosu (deployment.yaml)
+
+AYAR:
+--------------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: semantic-search
+spec:
+  replicas: 2   # <-- EN AZ 2 POD ÇALIŞMALIDIR!
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+--------------------------------------------------------------------------------
+
+NEDEN BU ÇÖZÜM?:
+- Pod'lardan biri çökerse, bellek hatası alırsa veya node yeniden başlarsa,
+  İKİNCİ POD HEMEN DEVREDE KALIR ve Kafka mesajlarını tüketmeye devam eder.
+- Çöken pod Kubernetes tarafından 10 saniye içinde yeniden ayağa kaldırılır.
+- Böylece servis asla 24 saat kapalı kalamaz; Kafka'daki veriler silinmeden önce
+  tüketilmiş olur.
+
+--------------------------------------------------------------------------------
+3. ÇÖZÜM: RAM İÇİN 24 SAATLİK TEMİZLİK GÖREVİ (TTL / Scheduled Purge)
+--------------------------------------------------------------------------------
+RAM'deki ConcurrentHashMap'in sonsuza kadar şişmesini ve eski dünkü verilerin
+hafızada kalmasını önlemek için otomatik bir temizlik mekanizması eklenir.
+
+Uygulama Yeri:
+src/main/java/com/example/semantic_search/repository/IndexingStateRepository.java
+
+EKLENECEK KOD:
+--------------------------------------------------------------------------------
+import org.springframework.scheduling.annotation.Scheduled;
+import java.time.temporal.ChronoUnit;
+
+// Her gece saat 03:00'te çalışır ve 24 saattir güncellenmeyen kayıtları RAM'den siler:
+@Scheduled(cron = "0 0 3 * * ?")
+public void purgeExpiredStates() {
+    Instant threshold = Instant.now().minus(24, ChronoUnit.HOURS);
+    
+    // 24 saatten eski kayıtları RAM'den güvenli şekilde temizle:
+    storage.entrySet().removeIf(entry -> {
+        IndexingState state = entry.getValue();
+        return state.getUpdatedAt() != null && state.getUpdatedAt().isBefore(threshold);
+    });
+}
+--------------------------------------------------------------------------------
+
+NEDEN BU ÇÖZÜM?:
+- Kafka 24 saatte bir kendini sıfırladığı gibi, bizim RAM belleğimiz de kendini
+  24 saatte bir temizler.
+- RAM şişmesi (OutOfMemoryError) %100 engellenir.
+- Dünden kalan eski kartlar temizlendiği için ertesi gün taze başlar.
+
+--------------------------------------------------------------------------------
+4. ÇÖZÜM: KAFKA CONSUMER "EARLIEST" AYARI
+--------------------------------------------------------------------------------
+Sunucu kapalı kalıp tekrar açıldığında Kafka'da henüz silinmemiş (24 saatlik
+pencere içindeki) tüm mesajları başa sarıp okumasını garanti eder.
+
+Uygulama Yeri:
+src/main/resources/application.yml
+
+AYAR:
+--------------------------------------------------------------------------------
+spring:
+  kafka:
+    consumer:
+      enable-auto-commit: false
+      auto-offset-reset: earliest   # <-- KESİNLİKLE EARLIEST OLMALIDIR
+--------------------------------------------------------------------------------
+
+NEDEN BU ÇÖZÜM?:
+- Eğer "latest" yapılırsa, sunucu kapalıyken gelen mesajlar atlanır.
+- "earliest" sayesinde pod ayağa kalktığı anda, kapalı kaldığı sürede biriken
+  tüm mesajları sırayla okur ve OpenSearch'e yazar.
+
+================================================================================
+3. OPENSEARCH'TEKİ VERİLERİN DURUMU NE OLUR?
+================================================================================
+- Kafka 24 saatte bir sıfırlansa veya temizlense dahi:
+  OPENSEARCH'TEKİ VERİLER ASLA SİLİNMEZ!
+- OpenSearch diski bağımsız ve kalıcıdır (Persistent Volume).
+- Kafka sadece verinin geldiği "taşıma borusudur"; OpenSearch ise suyun biriktiği
+  "barajdır". Boru temizlense de barajdaki su durur.
+- Eğer OpenSearch'teki eski dokümanların da silinmesi istenirse, bu işlem
+  OpenSearch Index State Management (ISM) veya REST API ile yapılır; Kafka'nın
+  sıfırlanması OpenSearch'teki geçmiş aramaları bozmaz.
+
+================================================================================
+4. DEVREYE ALMA KONTROL LİSTESİ (CHECKLIST)
+================================================================================
+[ ] 1. JsonSearchEventMapper.java içinde "version" ataması "System.currentTimeMillis()" yapıldı mı?
+[ ] 2. application.yml içinde "spring.kafka.consumer.auto-offset-reset: earliest" tanımlı mı?
+[ ] 3. Kubernetes deployment dosyasında "replicas: 2" (veya daha fazla) tanımlandı mı?
+[ ] 4. IndexingStateRepository içine 24 saatlik "@Scheduled purgeExpiredStates()" temizliği eklendi mi?
+[ ] 5. Ana Spring Boot uygulama sınıfına (@SpringBootApplication) "@EnableScheduling" anotasyonu eklendi mi?
+
+Bu 5 adım tamamlandığında, Kafka'nın 24 saatlik periyodik sıfırlanması sisteme
+hiçbir zarar veremez, veri kaybı ve kilitlenme yaşanmaz.
+================================================================================
